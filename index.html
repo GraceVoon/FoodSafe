@@ -4,46 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FoodSafe</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
   <div class="banner" role="note">
-    Prototype with <strong>simulated data</strong>. Nothing here is a real order, and no real riders, platforms or CCTV are connected.
+    Prototype with <strong>simulated data</strong> and public demo accounts. Not real security, and no real orders, riders, apps or CCTV are connected.
   </div>
-
-  <header class="top">
-    <h1>FoodSafe</h1>
-    <p class="tag">Secure food handoff for shared waiting areas</p>
-  </header>
-
-  <nav class="tabs" role="tablist" aria-label="Views">
-    <button role="tab" data-view="staff" aria-selected="true">Staff / guard</button>
-    <button role="tab" data-view="resident" aria-selected="false">Resident</button>
-    <button role="tab" data-view="tests" aria-selected="false">Test log</button>
-    <button role="tab" data-view="about" aria-selected="false">About</button>
-  </nav>
-
-  <main>
-    <section id="view-staff" class="view"></section>
-    <section id="view-resident" class="view" hidden></section>
-    <section id="view-tests" class="view" hidden></section>
-    <section id="view-about" class="view" hidden></section>
-  </main>
-
-  <aside class="demo" aria-label="Demo tools">
-    <div class="demo-row">
-      <strong>Demo tools</strong>
-      <span id="clock" class="muted"></span>
-    </div>
-    <div class="demo-row buttons">
-      <button id="btn-demo" class="ghost">Load demo data</button>
-      <button id="btn-ff5" class="ghost">Skip ahead 5 min</button>
-      <button id="btn-ff10" class="ghost">Skip ahead 10 min</button>
-      <button id="btn-reset" class="ghost danger">Reset everything</button>
-    </div>
-  </aside>
-
-  <script src="logic.js"></script>
-  <script src="app.js"></script>
+  <div id="app"></div>
+  <noscript><p style="padding:16px">FoodSafe needs JavaScript to run.</p></noscript>
+  <script src="logic.js?v=2"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>
