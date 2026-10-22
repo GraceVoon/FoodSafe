@@ -16,7 +16,7 @@
     notice: null, loginMsg: null, loginDraft: '',
     regDraft: { unit: '', ref: '', note: '' }, regMsg: null,
     verifyMsg: null, verified: null, expectedOrderId: null, keepExpected: false,
-    filter: 'pending', query: '', logQuery: '', logType: 'all',
+    filter: 'pending', query: '', logQuery: '', logType: 'all', logCategory: 'all', logStart: '', logEnd: '',
     resMsg: {}, testMsg: null, demoMsg: null, followMsg: null, lastPath: null
   };
   var pendingRender = false;
@@ -145,7 +145,7 @@
     if (!user) return [['/login', 'Log in'], ['/about', 'About']];
     if (user.role === F.STAFF) {
       return [['/staff', 'Dashboard'], ['/staff/register', 'Register delivery'], ['/staff/verify', 'Verify collection'],
-        ['/staff/log', 'Activity log'], ['/staff/tests', 'Test log'], ['/about', 'About']];
+        ['/staff/log', 'Activity log'], ['/about', 'About']];
     }
     return [['/resident', 'My deliveries'], ['/about', 'About']];
   }
@@ -338,27 +338,45 @@
   // Staff: activity log
   // ---------------------------------------------------------------------------------------------
   function logTableHtml(user) {
-    var r = F.getActivityLog(state, user, { query: ui.logQuery, type: ui.logType });
+    var startTime = ui.logStart ? new Date(ui.logStart).getTime() : null;
+    var endTime = ui.logEnd ? new Date(ui.logEnd).getTime() : null;
+    var r = F.getActivityLog(state, user, {
+      query: ui.logQuery, type: ui.logType, category: ui.logCategory,
+      startTime: startTime, endTime: endTime
+    });
     if (!r.ok) return msgHtml({ kind: 'bad', text: reasonText(r.reason) });
+    if (startTime != null && endTime != null && startTime > endTime) {
+      return '<p class="msg warn" role="status">The start time must be earlier than or equal to the end time.</p>';
+    }
     if (!r.entries.length) return '<p class="empty">No matching events.</p>';
-    var h = '<div class="tablewrap"><table><thead><tr><th>Time</th><th>Event</th><th>By</th><th>Order</th><th>Outcome</th><th>Details</th></tr></thead><tbody>';
+    var h = '<div class="tablewrap"><table><thead><tr><th>Time</th><th>Category</th><th>Event</th><th>By</th><th>Order</th><th>Outcome</th><th>Details</th></tr></thead><tbody>';
     r.entries.slice(0, 100).forEach(function (e) {
-      h += '<tr><td>' + fmtTimeSec(e.timestamp) + '</td><td>' + esc(EVENT_LABELS[e.eventType] || e.eventType) + '</td><td>' +
-        esc(e.actorName || e.actorRole) + (e.actorName ? '<span class="muted">' + esc(e.actorRole) + '</span>' : '') + '</td><td>' + esc(e.orderReference || '-') +
-        '</td><td>' + esc(e.outcome) + '</td><td>' + esc(e.message) + '</td></tr>';
+      h += '<tr><td>' + new Date(e.timestamp).toLocaleString([], { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+        '</td><td>' + esc(F.eventCategory(e.eventType)) + '</td><td>' + esc(EVENT_LABELS[e.eventType] || e.eventType) + '</td><td>' +
+        esc(e.actorName || e.actorRole) + (e.actorName ? '<span class="muted">' + esc(e.actorRole) +
+        (e.actorUserId ? ' · ' + esc(e.actorUserId) : '') + '</span>' : (e.actorUserId ? '<span class="muted">' + esc(e.actorUserId) + '</span>' : '')) +
+        '</td><td>' + esc(e.orderReference || '-') + '</td><td>' + esc(e.outcome) + '</td><td>' + esc(e.message) + '</td></tr>';
     });
     return h + '</tbody></table></div>' + (r.entries.length > 100 ? '<p class="muted small">Showing the latest 100 of ' + r.entries.length + ' matching events.</p>' : '');
   }
 
   function renderLog(user) {
     return '<h1 class="page">Activity log</h1><div class="card"><div class="row">' +
+      '<div><label for="log-category">Category</label><select id="log-category">' +
+      [['all', 'All categories'], ['Deliveries', 'Deliveries'], ['Collection', 'Collection'], ['Follow-up', 'Follow-up'],
+       ['Access and Security', 'Access and Security'], ['System/Demo', 'System/Demo']].map(function (x) {
+        return '<option value="' + esc(x[0]) + '"' + (ui.logCategory === x[0] ? ' selected' : '') + '>' + esc(x[1]) + '</option>';
+      }).join('') + '</select></div>' +
       '<div><label for="log-type">Event</label><select id="log-type"><option value="all">All events</option>' +
       Object.keys(EVENT_LABELS).map(function (k) {
         return '<option value="' + k + '"' + (ui.logType === k ? ' selected' : '') + '>' + esc(EVENT_LABELS[k]) + '</option>';
       }).join('') + '</select></div>' +
-      '<div><label for="log-q">Search</label><input id="log-q" autocomplete="off" value="' + esc(ui.logQuery) + '"></div></div>' +
+      '<div><label for="log-q">Search</label><input id="log-q" autocomplete="off" value="' + esc(ui.logQuery) + '" placeholder="Event, order, user, outcome..."></div></div>' +
+      '<div class="row" style="margin-top:10px"><div><label for="log-start">From date and time</label><input id="log-start" type="datetime-local" value="' + esc(ui.logStart) + '"></div>' +
+      '<div><label for="log-end">To date and time</label><input id="log-end" type="datetime-local" value="' + esc(ui.logEnd) + '"></div>' +
+      '<div style="align-self:end"><button type="button" class="ghost" data-action="clear-log-filters">Clear filters</button></div></div>' +
       '<div id="logtable" style="margin-top:10px">' + logTableHtml(user) + '</div>' +
-      '<p class="muted small" style="margin-bottom:0">Demonstration record kept in this browser. It is not tamper-proof. Passwords and typed codes are never recorded.</p></div>';
+      '<p class="muted small" style="margin-bottom:0">Operational and demo/system events share the existing activity history. Times use the stored event timestamps and your browser’s local time. This demonstration record is not tamper-proof; passwords and typed codes are never recorded.</p></div>';
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -397,11 +415,11 @@
   // ---------------------------------------------------------------------------------------------
   // Wording for each simulated notification (the stored record only holds the type, delivery, unit and times).
   function notifHtml(n) {
-    var head = { reminder: 'Collection reminder', overdue: 'Overdue', staff_reminder: 'Reminder from staff', disposed: 'Delivery disposed' }[n.type] || 'Notification';
+    var head = { reminder: 'Collection reminder', overdue: 'Overdue notice', staff_reminder: 'Staff follow-up reminder', disposed: 'Delivery disposed' }[n.type] || 'Notification';
     var body = {
-      reminder: 'Please collect it by ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the collection time') + ' so the food stays fresh.',
-      overdue: 'The collection time passed at ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the deadline') + '. Please collect it promptly.',
-      staff_reminder: 'This delivery is overdue. Please collect it promptly.',
+      reminder: 'Please collect this delivery by ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the collection deadline') + '. FoodSafe does not monitor storage conditions or food safety.',
+      overdue: 'The collection deadline passed at ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the recorded deadline') + '. Please collect your delivery promptly. If you have concerns about its storage or condition, assess it before consumption.',
+      staff_reminder: 'A staff member sent this follow-up reminder because the delivery is overdue. Please collect it promptly. If you have concerns about its storage or condition, assess it before consumption.',
       disposed: 'Building staff marked this delivery as disposed after it was not collected. Ask the guard house if you have questions.'
     }[n.type] || '';
     return '<li class="notif ' + esc(n.type) + '"><div><strong>' + esc(head) + '</strong> · ' + esc(n.orderReference) + ' · Unit ' + esc(n.unit) +
@@ -414,7 +432,7 @@
     var r = F.residentOrders(state, user);
     var nr = F.residentNotifications(state, user);
     var h = '<h1 class="page">Welcome, ' + esc(user.displayName) + '</h1><p class="muted" style="margin-top:-4px">Your unit: <strong>' + esc(user.unitNumber) + '</strong></p>' +
-      '<p class="muted">Please collect each delivery within ' + limit + ' minutes of arrival. You will get a reminder first. Food left longer is overdue and needs to be collected promptly.</p>';
+      '<p class="muted">Please collect each delivery within ' + limit + ' minutes of arrival. A collection reminder is shown before the deadline when the configured time allows. FoodSafe tracks elapsed time only; it does not monitor storage conditions or guarantee food safety.</p>';
 
     if (nr.ok && nr.notifications.length) {
       h += '<div class="card" id="notifications"><h2>Notifications</h2><ul class="notifs">' +
@@ -430,7 +448,7 @@
       h += '<div class="card' + (over ? ' overdue-card' : '') + '"><div class="order-head"><span class="title">' + esc(o.orderReference) + '</span>' + statusBadge(o, t) + '</div>' +
         '<dl class="facts"><dt>Arrived</dt><dd>' + fmtTime(o.arrivalTime) + '</dd><dt>Collect by</dt><dd>' + fmtTime(F.deadlineTime(o, limit)) + '</dd><dt>Waiting</dt><dd>' + F.waitingMinutes(o, t) + ' min</dd>' +
         (o.deliveryNote ? '<dt>Note</dt><dd>' + esc(o.deliveryNote) + '</dd>' : '') + '</dl>';
-      if (over) h += '<div class="msg warn"><strong>Overdue.</strong> The collection time has passed. Please collect this delivery promptly so the food stays safe to eat, or authorise someone below to collect it. Staff may contact you.</div>';
+      if (over) h += '<div class="msg warn"><strong>Overdue.</strong> The collection deadline has passed. Please collect your delivery promptly. If you have concerns about its storage or condition, assess it before consumption. You can authorise someone below to collect it, and staff may contact you.</div>';
       h += '<p style="margin:10px 0 0">Show this code to the guard:</p><div class="code" aria-label="Your collection code">' + esc(o.collectionCode) + '</div>' +
         '<p class="muted small">Demo only: a real system would send this code to your phone.</p>';
       var d = F.activeDelegation(o, t);
@@ -463,28 +481,34 @@
   // ---------------------------------------------------------------------------------------------
   function renderAbout() {
     return '<h1 class="page">About FoodSafe</h1>' +
-      '<div class="card"><h2>Why it exists</h2><p>Delivered food is often left in a shared waiting area or guard house. It can be taken by the wrong person, mixed up, or left until it is cold, and afterwards residents have to check CCTV and chase people. FoodSafe tests a more accountable handoff. It was inspired by a widely shared video of a food theft in a Singapore condominium, which is one example and not proof of how common the problem is in any township.</p></div>' +
-      '<div class="card"><h2>How it works</h2><ol>' +
-      '<li><strong>Staff register a delivery</strong> with the unit number and order reference. The arrival time is recorded and a collection code is created for the resident.</li>' +
-      '<li><strong>Residents log in</strong> and see their own deliveries, the code, and how long the food has been waiting. They can authorise someone else for a limited time.</li>' +
-      '<li><strong>Staff verify the code</strong> the person gives them. A good code shows the order and unit, and nothing is handed over yet.</li>' +
-      '<li><strong>Staff confirm the handoff.</strong> The order becomes collected, the time is recorded and the code can never be used again.</li>' +
-      '<li><strong>Reminders and overdue food.</strong> The resident gets a reminder before the collection time and an overdue notice after it. Staff then follow up (another reminder, contacting the resident, moving it to a holding area). Food is never disposed of automatically: a staff member can mark an overdue delivery as disposed only after confirming it is allowed by the building procedure.</li></ol></div>' +
-      '<div class="card"><h2>Who can do what</h2><div class="tablewrap"><table><thead><tr><th></th><th>Staff</th><th>Resident</th></tr></thead><tbody>' +
-      '<tr><td>Register deliveries, verify codes, confirm handoffs</td><td>Yes</td><td>No</td></tr>' +
-      '<tr><td>See all orders and the activity log</td><td>Yes</td><td>No</td></tr>' +
-      '<tr><td>See own unit\'s orders and code</td><td>No</td><td>Yes</td></tr>' +
+      '<div class="card"><h2>Why It Exists</h2>' +
+      '<p>Food deliveries left unattended in shared residential areas may be collected by the wrong person, mixed up, or left uncollected for too long. Resolving these incidents can be inconvenient for residents and building staff.</p>' +
+      '<p>FoodSafe explores a more accountable food-delivery handover process through delivery registration, collection-code verification, simulated resident notifications, and delivery activity records.</p>' +
+      '<p>The idea was inspired by a widely shared video depicting food theft at a Singapore condominium. This example illustrates a possible problem but does not establish how common such incidents are.</p></div>' +
+      '<div class="card"><h2>How It Works</h2><ol>' +
+      '<li><strong>Register a delivery.</strong> Staff record the resident unit, order reference, optional note, and arrival time. FoodSafe generates a collection code for the intended resident.</li>' +
+      '<li><strong>View delivery details.</strong> Residents can log in to see deliveries associated with their own unit, view the collection deadline and waiting time, and authorise another person to collect a delivery for a limited period.</li>' +
+      '<li><strong>Verify the collection code.</strong> Staff verify the code presented by the collector and check the associated delivery details. Verification alone does not mark the delivery as collected.</li>' +
+      '<li><strong>Confirm the handover.</strong> Staff separately confirm that the food has physically been handed over. The delivery is then marked as collected, and the code can no longer be used.</li>' +
+      '<li><strong>Manage overdue deliveries.</strong> The prototype displays simulated reminders and overdue notices. Staff can record a follow-up reminder, record that they contacted the resident, record that a delivery was moved to a holding area, or mark it as disposed when permitted by the applicable building procedure. These records do not physically move or dispose of food.</li>' +
+      '</ol></div>' +
+      '<div class="card"><h2>Who Can Do What?</h2><div class="tablewrap"><table><thead><tr><th>Function</th><th>Staff</th><th>Resident</th></tr></thead><tbody>' +
+      '<tr><td>Register deliveries</td><td>Yes</td><td>No</td></tr>' +
+      '<tr><td>Verify collection codes and confirm handovers</td><td>Yes</td><td>No</td></tr>' +
+      '<tr><td>View all delivery records and activity history</td><td>Yes</td><td>No</td></tr>' +
+      '<tr><td>View deliveries associated with their own unit</td><td>No</td><td>Yes</td></tr>' +
       '<tr><td>Authorise another collector</td><td>No</td><td>Yes</td></tr>' +
-      '<tr><td>Follow up overdue deliveries (reminder, contact, holding area, disposal)</td><td>Yes</td><td>No</td></tr>' +
-      '<tr><td>See own notifications</td><td>No</td><td>Yes</td></tr>' +
-      '<tr><td>Demonstration tools and test log</td><td>Yes</td><td>No</td></tr></tbody></table></div>' +
-      '<p class="muted">Each account has one fixed role. To switch role, log out and log in with the other account.</p></div>' +
-      '<div class="card"><h2>What it does not do</h2><ul>' +
-      '<li>It is a <strong>prototype with simulated data</strong>. No real notifications (SMS, WhatsApp, email or push) are sent, and there is no connection to Grab, foodpanda, riders, CCTV or lockers.</li>' +
-      '<li>It cannot stop theft by itself. It only helps if food is handed over by a person or locker that checks the code, not left on an open shelf.</li>' +
-      '<li><strong>The login is a demonstration, not real security.</strong> The accounts and checks run in your browser, so anyone who can edit the page code or browser storage can get around them. A real system needs a server to check who is logged in.</li>' +
-      '<li>Data is stored in this browser only, so other devices and browsers see their own copy. The activity log is a demonstration record and is not tamper-proof.</li>' +
-      '<li>It does not identify or track anyone.</li></ul></div>';
+      '<tr><td>Record follow-up actions for overdue deliveries</td><td>Yes</td><td>No</td></tr>' +
+      '<tr><td>View personal delivery notifications</td><td>No</td><td>Yes</td></tr></tbody></table></div>' +
+      '<p class="muted">Each demonstration account has a fixed role. Log out before switching accounts.</p></div>' +
+      '<div class="card"><h2>Prototype Limitations</h2><ul>' +
+      '<li>FoodSafe uses simulated data. Notifications appear within the application; no real SMS, WhatsApp, email, or push notifications are sent.</li>' +
+      '<li>The prototype does not connect to delivery platforms, riders, CCTV systems, or physical lockers.</li>' +
+      '<li>The login system is for demonstration purposes and does not provide production-level security.</li>' +
+      '<li>Data is stored locally in the browser and is not automatically synchronised across devices.</li>' +
+      '<li>The activity history is a demonstration record, not a tamper-proof audit log.</li>' +
+      '<li>FoodSafe does not identify or track people, monitor food temperature or storage conditions, or guarantee food safety. It supports a more accountable handover process but cannot independently prevent theft.</li>' +
+      '</ul></div>';
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -558,7 +582,7 @@
   function resetUi() {
     ui.loginMsg = null; ui.loginDraft = ''; ui.regDraft = { unit: '', ref: '', note: '' }; ui.regMsg = null;
     ui.verifyMsg = null; ui.verified = null; ui.expectedOrderId = null; ui.keepExpected = false;
-    ui.filter = 'pending'; ui.query = ''; ui.logQuery = ''; ui.logType = 'all';
+    ui.filter = 'pending'; ui.query = ''; ui.logQuery = ''; ui.logType = 'all'; ui.logCategory = 'all'; ui.logStart = ''; ui.logEnd = '';
     ui.resMsg = {}; ui.testMsg = null; ui.demoMsg = null; ui.followMsg = null; ui.lastPath = null;
   }
 
@@ -707,6 +731,10 @@
       ui.demoMsg = res.ok ? { kind: 'ok', text: 'Demo data reset. There are no orders now.' } : { kind: 'bad', text: reasonText(res.reason) };
       save(); route(); return;
     }
+    if (action === 'clear-log-filters') {
+      ui.logQuery = ''; ui.logType = 'all'; ui.logCategory = 'all'; ui.logStart = ''; ui.logEnd = '';
+      route(); return;
+    }
     if (action === 'csv') { downloadCsv(); return; }
     if (action === 'clear-tests') {
       if (!window.confirm('Clear all test results?')) return;
@@ -762,6 +790,9 @@
     var user = currentUser();
     if (id === 'q-filter' && user && user.role === F.STAFF) { ui.filter = e.target.value; el('queue').innerHTML = queueHtml(user); }
     else if (id === 'log-type' && user && user.role === F.STAFF) { ui.logType = e.target.value; el('logtable').innerHTML = logTableHtml(user); }
+    else if (id === 'log-category' && user && user.role === F.STAFF) { ui.logCategory = e.target.value; el('logtable').innerHTML = logTableHtml(user); }
+    else if (id === 'log-start' && user && user.role === F.STAFF) { ui.logStart = e.target.value; el('logtable').innerHTML = logTableHtml(user); }
+    else if (id === 'log-end' && user && user.role === F.STAFF) { ui.logEnd = e.target.value; el('logtable').innerHTML = logTableHtml(user); }
   });
 
   function downloadCsv() {

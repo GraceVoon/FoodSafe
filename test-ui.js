@@ -95,6 +95,9 @@ function check(id, desc, cond, detail) {
 
   await c.login('staff01', 'Staff123!');
   check('T02', 'Log in with valid staff credentials: staff dashboard appears', c.hash() === '#/staff' && /Staff dashboard/.test(c.text()));
+  check('POLISH', 'Staff navigation keeps Activity Log but hides Test Log',
+    c.$$('.nav a').some((a) => /Activity log/i.test(a.textContent)) &&
+    !c.$$('.nav a').some((a) => /Test log/i.test(a.textContent)));
 
   await c.logout();
   check('T06', 'Staff logs out: login page appears and session is cleared',
@@ -230,6 +233,16 @@ function check(id, desc, cond, detail) {
   check('T22', 'Staff opens the activity log: recent events appear',
     /Delivery registered/.test(logText) && /Collection successful/.test(logText) && /Invalid code attempt/.test(logText) && /Login/.test(logText) && /Logout/.test(logText) && /Access denied/.test(logText));
   check('T22', 'The log never shows passwords or typed codes', !/Staff123!|Resident123!|Resident456!/.test(logText) && !logText.includes(wrong + ' '));
+  check('POLISH', 'Activity Log includes category and real timestamp filters',
+    !!c.$('#log-category') && !!c.$('#log-start') && !!c.$('#log-end') && /Category/.test(logText));
+  c.set(c.$('#log-category'), 'Collection');
+  const categoryFiltered = !!c.$('#logtable') && !/Delivery registered/.test(c.$('#logtable').textContent);
+  c.set(c.$('#log-category'), 'all');
+  c.set(c.$('#log-start'), '2099-01-01T00:00');
+  const futureFiltered = /No matching events/.test(c.$('#logtable').textContent);
+  c.set(c.$('#log-start'), '');
+  check('POLISH', 'Activity Log category and start-time filters narrow the existing event history',
+    categoryFiltered && futureFiltered);
 
   // ---------------------------------------------------------------- T24 (refresh)
   const snapLocal = { [STATE_KEY]: c.w.localStorage.getItem(STATE_KEY) };
@@ -473,7 +486,7 @@ function check(id, desc, cond, detail) {
     /Delivery registered/.test(lg) && /Collection reminder generated/.test(lg) && /Delivery marked overdue/.test(lg) && /Follow-up: reminder sent/.test(lg) &&
     /Follow-up: resident contacted/.test(lg) && /Follow-up: moved to holding area/.test(lg) && /system/.test(lg));
   await asRes('resident01', 'Resident123!');
-  check('OVD05', 'The resident sees the staff reminder, only on their own page', /Reminder from staff · OV-1 · Unit A-12-03/.test(ov.text()) && !/OV-2/.test(ov.text()));
+  check('OVD05', 'The resident sees the staff reminder, only on their own page', /Staff follow-up reminder · OV-1 · Unit A-12-03/.test(ov.text()) && !/OV-2/.test(ov.text()));
 
   // resident collects an overdue delivery (normal code check by staff)
   const code1ov = ov.order('OV-1').collectionCode;
@@ -489,7 +502,7 @@ function check(id, desc, cond, detail) {
   await asRes('resident01', 'Resident123!');
   const rt6 = ov.text();
   check('OVD06', 'The resident sees it in their history as Collected, with no overdue notices left for it',
-    /Collection history/.test(rt6) && /Collected/.test(ov.$$('table').map((x) => x.textContent).join(' ')) && !/Overdue ·/.test(rt6) && !/Reminder from staff/.test(rt6) && ov.$$('.code').length === 0);
+    /Collection history/.test(rt6) && /Collected/.test(ov.$$('table').map((x) => x.textContent).join(' ')) && !/Overdue ·/.test(rt6) && !/Staff follow-up reminder/.test(rt6) && ov.$$('.code').length === 0);
   await asStaff();
   await ov.click(ov.$('[data-action="demo-ff10"]'));
   check('OVD07', 'A collected delivery stays Collected after its deadline and gets no further reminders or overdue entries',

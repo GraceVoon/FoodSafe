@@ -421,12 +421,19 @@ t('activity log has every required event type, and residents cannot read it', ()
   assert.strictEqual(F.getActivityLog(s, res1).reason, 'forbidden');
 });
 
-t('log search and type filter', () => {
+t('log search, category and timestamp filters use stored event fields', () => {
   const s = fresh();
   reg(s, 'R1');
-  F.verifyCode(s, staff, '000001', T0);
+  F.verifyCode(s, staff, '000001', T0 + 2 * MIN);
   assert.strictEqual(F.getActivityLog(s, staff, { type: 'verify_failed' }).entries.length, 1);
   assert.strictEqual(F.getActivityLog(s, staff, { query: 'R1' }).entries.length, 1);
+  assert.strictEqual(F.getActivityLog(s, staff, { query: 'u-staff' }).entries.length, 2);
+  assert.strictEqual(F.getActivityLog(s, staff, { category: 'Deliveries' }).entries.length, 1);
+  assert.strictEqual(F.getActivityLog(s, staff, { category: 'Collection' }).entries.length, 1);
+  assert.strictEqual(F.getActivityLog(s, staff, { startTime: T0 + MIN, endTime: T0 + 3 * MIN }).entries.length, 1);
+  assert.strictEqual(F.getActivityLog(s, staff, { endTime: T0 - 1 }).entries.length, 0);
+  assert.strictEqual(F.eventCategory('demo_clock'), 'System/Demo');
+  assert.strictEqual(F.eventLabel('delivery_registered'), 'Delivery registered');
 });
 
 t('blocked page visits are logged without needing a login', () => {

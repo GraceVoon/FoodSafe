@@ -1,12 +1,14 @@
 {
-  "name": "foodsafe",
-  "version": "2.0.0",
+  "name": "foodsafe-prototype",
+  "version": "1.0.0",
   "private": true,
-  "description": "FoodSafe prototype: secure food handoff for residential communities",
+  "description": "FoodSafe static hackathon prototype and tests",
   "scripts": {
-    "test": "node test.js && node test-ui.js"
+    "test": "node test.js",
+    "test:ui": "node test-ui.js",
+    "test:ui:report": "node test-ui.js --report"
   },
   "devDependencies": {
-    "jsdom": "^29.1.1"
+    "jsdom": "^26.1.0"
   }
 }

@@ -25,6 +25,8 @@ The idea was inspired by a widely shared video of a food theft in a Singapore co
 | Resident | `resident07` | `Resident007!` | B-05-06 |
 | Resident | `resident08` | `Resident008!` | B-06-01 |
 
+The usability Test Log is retained at the staff-only `#/staff/tests` route for team testing, but is intentionally hidden from the normal navigation.
+
 The residents are fictional. They are defined in one place, the `ACCOUNTS` list at the top of `logic.js`, and shown on the login page. The unit list that staff can register deliveries for is built from the same list, so a unit works for deliveries exactly when a resident account has it. There is one account per unit. Each account has one fixed role. The role comes from the account, never from a button, the address bar or browser storage. To try the other role, log out and log in with the other account, or open a second tab (each tab has its own login, and they share the same orders).
 
 ### Adding another demo resident
@@ -39,7 +41,7 @@ Copy one resident line in `ACCOUNTS` (`logic.js`) and change the `userId`, `user
 | See every order, search and filter the queue | Yes | No |
 | Verify a collection code, then confirm the handoff | Yes | No |
 | Follow up overdue deliveries: send a reminder, record contact, record a move to the holding area, mark as disposed | Yes | No |
-| Activity log, demonstration tools, test log | Yes | No |
+| Activity log and demonstration controls | Yes | No |
 | See their own unit's orders, code and waiting time | No | Yes |
 | Authorise someone else to collect, for a limited time | No | Yes |
 | Collection history (collected and disposed) | No | Yes (own unit only) |
@@ -149,7 +151,7 @@ node test-ui.js --report   # same, and writes TEST_REPORT.md
 - Notifications are created when a page is open or the demo clock moves, because there is no server running in the background. In a real system a server would create them on time even if nobody is looking.
 - *Mark as Disposed* only records a decision. No building's real disposal policy has been established, so the dialog tells staff to follow the applicable building procedure.
 - Test results from a few people show what happened in your test, not what would happen across a township.
-- Tested in a browser simulator and loaded without errors in desktop Chromium. Not yet tried on real phones, Safari or Firefox.
+- The current logic test suite passes. After the latest UI polish, the end-to-end UI suite still needs to be rerun (`npm install`, then `npm run test:ui`). Not yet tried on real phones, Safari or Firefox.
 
 ## What a real pilot would need
 
@@ -167,6 +169,18 @@ node test-ui.js --report   # same, and writes TEST_REPORT.md
 - Version 1 locked an order after three wrong codes. Because staff now enter a code without choosing an order first, there is no order to lock, so three wrong codes in a row show a warning to ask for ID instead.
 - A row's **Verify code** button limits the check to that order, so another order's code is rejected.
 - The test log is staff-only because it is a team tool for test day.
+
+## Running the checks
+
+Use Node.js 20 or newer.
+
+```sh
+npm install
+npm test
+npm run test:ui
+```
+
+`npm test` runs the logic/rule tests. `npm run test:ui` runs the browser-page tests using jsdom. The static prototype itself does not need Node.js to run on GitHub Pages.
 
 ## Files
 

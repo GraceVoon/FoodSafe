@@ -227,16 +227,55 @@
     if (state.audit.length > LOG_LIMIT) state.audit.length = LOG_LIMIT;
   }
 
+  function eventLabel(eventType) {
+    var labels = {
+      login: 'Login', login_failed: 'Login failed', logout: 'Logout',
+      delivery_registered: 'Delivery registered', verify_success: 'Code verified',
+      verify_failed: 'Invalid code attempt', collected: 'Collection successful',
+      collect_failed: 'Collection failed', delegation_created: 'Collector authorised',
+      access_denied: 'Access denied', demo_loaded: 'Demo data loaded', demo_reset: 'Demo reset',
+      demo_clock: 'Demo clock moved', demo_threshold: 'Overdue limit changed',
+      reminder_generated: 'Collection reminder generated', marked_overdue: 'Delivery marked overdue',
+      followup_reminder: 'Follow-up: reminder sent', followup_contact: 'Follow-up: resident contacted',
+      followup_holding: 'Follow-up: moved to holding area', disposed: 'Delivery disposed'
+    };
+    return labels[eventType] || eventType;
+  }
+
+  // Shared event categories keep operational activity distinct from demo/system controls.
+  function eventCategory(eventType) {
+    var categories = {
+      delivery_registered: 'Deliveries',
+      verify_success: 'Collection', verify_failed: 'Collection', collected: 'Collection',
+      collect_failed: 'Collection', delegation_created: 'Collection',
+      reminder_generated: 'Follow-up', marked_overdue: 'Follow-up',
+      followup_reminder: 'Follow-up', followup_contact: 'Follow-up',
+      followup_holding: 'Follow-up', disposed: 'Follow-up',
+      login: 'Access and Security', login_failed: 'Access and Security',
+      logout: 'Access and Security', access_denied: 'Access and Security',
+      demo_loaded: 'System/Demo', demo_reset: 'System/Demo',
+      demo_clock: 'System/Demo', demo_threshold: 'System/Demo'
+    };
+    return categories[eventType] || 'System/Demo';
+  }
+
   function getActivityLog(state, actor, opts) {
     var g = guard(actor, STAFF);
     if (g.fail) return g.fail;
     opts = opts || {};
     var q = String(opts.query || '').trim().toLowerCase();
     var type = opts.type && opts.type !== 'all' ? opts.type : null;
+    var category = opts.category && opts.category !== 'all' ? opts.category : null;
+    var startTime = typeof opts.startTime === 'number' && isFinite(opts.startTime) ? opts.startTime : null;
+    var endTime = typeof opts.endTime === 'number' && isFinite(opts.endTime) ? opts.endTime : null;
     var entries = state.audit.filter(function (e) {
       if (type && e.eventType !== type) return false;
+      if (category && eventCategory(e.eventType) !== category) return false;
+      if (startTime != null && e.timestamp < startTime) return false;
+      if (endTime != null && e.timestamp > endTime) return false;
       if (!q) return true;
-      return [e.eventType, e.actorRole, e.actorName, e.orderReference, e.outcome, e.message]
+      return [e.eventType, eventLabel(e.eventType), eventCategory(e.eventType), e.actorUserId, e.actorRole, e.actorName,
+        e.orderReference, e.outcome, e.message]
         .join(' ').toLowerCase().indexOf(q) !== -1;
     });
     // Newest first by the time the event happened (a reminder created later still sits at its own time).
@@ -869,7 +908,7 @@
     syncNotifications: syncNotifications, residentNotifications: residentNotifications,
     sendStaffReminder: sendStaffReminder, recordContact: recordContact, recordHolding: recordHolding,
     disposeDelivery: disposeDelivery, followUpInfo: followUpInfo,
-    residentOrders: residentOrders, getActivityLog: getActivityLog, findOrder: findOrder,
+    residentOrders: residentOrders, getActivityLog: getActivityLog, eventCategory: eventCategory, eventLabel: eventLabel, findOrder: findOrder,
     addTest: addTest, clearTests: clearTests, testSummary: testSummary, testsToCsv: testsToCsv,
     loadDemo: loadDemo, resetDemo: resetDemo, advanceClock: advanceClock, setOverdueMinutes: setOverdueMinutes
   };
