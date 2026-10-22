@@ -12,6 +12,8 @@
   --bad-ink: #8a1c12;
   --ok-bg: #dff3e6;
   --ok-ink: #145c37;
+  --notice-bg: #eef5ea;
+  --notice-ink: #3d4a42;
   --radius: 12px;
 }
 
@@ -30,6 +32,8 @@
     --bad-ink: #ffb4aa;
     --ok-bg: #173324;
     --ok-ink: #a6e6c1;
+    --notice-bg: #19211c;
+    --notice-ink: #b4c3b9;
   }
 }
 
@@ -42,7 +46,16 @@ body {
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-.banner { background: var(--warn-bg); color: var(--warn-ink); padding: 8px 16px; font-size: 14px; text-align: center; }
+/* slim prototype notice above the header. Badge and text flow inline, so on narrow screens the badge
+   shares the first line instead of taking a row of its own, and the text wraps centred. */
+.banner {
+  padding: 6px 16px; background: var(--notice-bg); color: var(--notice-ink);
+  border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; text-align: center; text-wrap: balance;
+}
+.banner-tag {
+  display: inline-block; margin-right: 6px; padding: 0 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap;
+}
 
 .wrap { max-width: 860px; margin: 0 auto; padding: 0 16px; }
 
