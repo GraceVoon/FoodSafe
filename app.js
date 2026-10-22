@@ -152,7 +152,7 @@
 
   function frame(user, path, inner) {
     var notice = ui.notice; ui.notice = null;
-    var h = '<div class="wrap"><header class="top"><p class="brand"><a href="#/" aria-label="FoodSafe home"><img class="brand-mascot" src="assets/foodsafe-mascot.png" alt=""><span>FoodSafe</span></a></p>';
+    var h = '<div class="wrap"><header class="top"><p class="brand"><a href="#/" aria-label="FoodSafe home"><img class="brand-mascot" src="foodsafe-mascot.png" alt=""><span>FoodSafe</span></a></p>';
     if (user) {
       h += '<div class="who"><span class="name">' + esc(user.displayName) + '</span>' +
         '<span class="role">' + roleLabel(user) + (user.unitNumber ? ' · ' + esc(user.unitNumber) : '') + '</span>';
@@ -171,7 +171,7 @@
   // Login
   // ---------------------------------------------------------------------------------------------
   function renderLogin() {
-    var h = '<section class="card login"><img class="login-logo" src="assets/foodsafe-logo.png" alt="FoodSafe logo: a friendly delivery box mascot">' +
+    var h = '<section class="card login"><img class="login-logo" src="foodsafe-logo.png" alt="FoodSafe logo">' +
       '<h1 class="login-title">FoodSafe</h1>' +
       '<p class="muted">A more accountable food handover for residential communities.</p>' +
       '<form id="form-login" novalidate>' +
