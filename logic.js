@@ -37,8 +37,37 @@
   var ACCOUNTS = Object.freeze([
     Object.freeze({ userId: 'u-staff01', username: 'staff01', password: 'Staff123!', role: STAFF, unitNumber: null, displayName: 'Demo Guard' }),
     Object.freeze({ userId: 'u-res01', username: 'resident01', password: 'Resident123!', role: RESIDENT, unitNumber: 'A-12-03', displayName: 'Demo Resident A' }),
-    Object.freeze({ userId: 'u-res02', username: 'resident02', password: 'Resident456!', role: RESIDENT, unitNumber: 'A-12-05', displayName: 'Demo Resident B' })
+    Object.freeze({ userId: 'u-res02', username: 'resident02', password: 'Resident456!', role: RESIDENT, unitNumber: 'A-12-05', displayName: 'Demo Resident B' }),
+    // Added later: six more fictional residents. One account per unit. To add another, copy a line,
+    // give it a new userId, username and unit number, and `node test.js` will check nothing clashes.
+    Object.freeze({ userId: 'u-res03', username: 'resident03', password: 'Resident003!', role: RESIDENT, unitNumber: 'A-12-07', displayName: 'Demo Resident C' }),
+    Object.freeze({ userId: 'u-res04', username: 'resident04', password: 'Resident004!', role: RESIDENT, unitNumber: 'A-13-02', displayName: 'Demo Resident D' }),
+    Object.freeze({ userId: 'u-res05', username: 'resident05', password: 'Resident005!', role: RESIDENT, unitNumber: 'A-13-05', displayName: 'Demo Resident E' }),
+    Object.freeze({ userId: 'u-res06', username: 'resident06', password: 'Resident006!', role: RESIDENT, unitNumber: 'B-05-03', displayName: 'Demo Resident F' }),
+    Object.freeze({ userId: 'u-res07', username: 'resident07', password: 'Resident007!', role: RESIDENT, unitNumber: 'B-05-06', displayName: 'Demo Resident G' }),
+    Object.freeze({ userId: 'u-res08', username: 'resident08', password: 'Resident008!', role: RESIDENT, unitNumber: 'B-06-01', displayName: 'Demo Resident H' })
   ]);
+
+  // Problems in the account list (duplicates, bad format, resident without a unit). Empty list = fine.
+  function accountProblems() {
+    var problems = [];
+    var ids = {}, names = {}, units = {};
+    ACCOUNTS.forEach(function (a) {
+      if (ids[a.userId]) problems.push('duplicate userId ' + a.userId);
+      ids[a.userId] = true;
+      if (names[a.username.toLowerCase()]) problems.push('duplicate username ' + a.username);
+      names[a.username.toLowerCase()] = true;
+      if (a.role === RESIDENT) {
+        if (!a.unitNumber) problems.push(a.username + ' has no unit number');
+        else {
+          if (!/^[A-Z]-\d{2}-\d{2}$/.test(a.unitNumber)) problems.push(a.username + ' unit "' + a.unitNumber + '" is not in the form A-12-03');
+          if (units[a.unitNumber]) problems.push('duplicate unit ' + a.unitNumber);
+          units[a.unitNumber] = true;
+        }
+      } else if (a.unitNumber) problems.push(a.username + ' is staff but has a unit number');
+    });
+    return problems;
+  }
 
   function publicUser(acc) {
     return { userId: acc.userId, username: acc.username, role: acc.role, unitNumber: acc.unitNumber, displayName: acc.displayName };
@@ -76,6 +105,12 @@
       if (a.role === RESIDENT && a.unitNumber && !seen[a.unitNumber]) { seen[a.unitNumber] = true; out.push(a.unitNumber); }
     });
     return out;
+  }
+
+  // Units with the demo resident's name, for the staff registration list (built from ACCOUNTS).
+  function residentDirectory() {
+    return ACCOUNTS.filter(function (a) { return a.role === RESIDENT && a.unitNumber; })
+      .map(function (a) { return { unitNumber: a.unitNumber, displayName: a.displayName }; });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -597,7 +632,7 @@
   return {
     STAFF: STAFF, RESIDENT: RESIDENT, PENDING: PENDING, COLLECTED: COLLECTED,
     DEFAULT_OVERDUE_MIN: DEFAULT_OVERDUE_MIN,
-    demoLogins: demoLogins, validUnits: validUnits, getUserById: getUserById,
+    demoLogins: demoLogins, validUnits: validUnits, residentDirectory: residentDirectory, accountProblems: accountProblems, getUserById: getUserById,
     newState: newState, normalizeState: normalizeState, seed: seed,
     login: login, logout: logout, recordAccessDenied: recordAccessDenied,
     registerDelivery: registerDelivery, verifyCode: verifyCode, cancelVerification: cancelVerification,

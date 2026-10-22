@@ -138,7 +138,7 @@ function check(id, desc, cond, detail) {
     /already exists/.test(c.text()) && c.state().orders.length === n0 + 1);
 
   await c.register('Z-99-99', 'T-ORDER-X');
-  const badUnit = /not in this prototype/.test(c.text()) && !c.order('T-ORDER-X');
+  const badUnit = /not a configured demo resident/.test(c.text()) && !c.order('T-ORDER-X');
   await c.register('', 'T-ORDER-Y');
   check('T12', 'Invalid or missing resident unit: registration rejected',
     badUnit && /Enter the resident unit number/.test(c.text()) && !c.order('T-ORDER-Y') && c.state().orders.length === n0 + 1);
@@ -296,6 +296,87 @@ function check(id, desc, cond, detail) {
   check('T09', 'Resident has no demonstration controls to reset anything', !c.$('[data-action="demo-reset"]') && !c.$('[data-action="demo-load"]'));
   await c.logout();
 
+  // ---------------------------------------------------------------- Eight demo residents
+  const L = require('./logic.js');
+  const units = L.validUnits();
+  check('RES', 'Eight configured units, no duplicates, account list has no problems',
+    units.length === 8 && new Set(units).size === 8 && L.accountProblems().length === 0);
+
+  await c.login('staff01', 'Staff123!');
+  await c.nav('#/staff/register');
+  const options = c.$$('#units option').map((o) => o.value);
+  const hint = c.$('#unit-hint').textContent;
+  check('RES', 'Unit list on the registration form is built from the resident data (all 8 units in the list and the hint)',
+    options.length === 8 && units.every((u) => options.includes(u) && hint.includes(u)));
+
+  for (const u of units) await c.register(u, 'UNIT-' + u, 'for ' + u);
+  check('RES', 'Staff can register a delivery for every configured unit',
+    units.every((u) => c.order('UNIT-' + u) && c.order('UNIT-' + u).residentUnit === u && c.order('UNIT-' + u).status === 'PENDING'));
+
+  await c.register('b-06-01', 'LOWER-1');
+  check('RES', 'A unit typed in lower case is accepted and stored in the standard form', c.order('LOWER-1') && c.order('LOWER-1').residentUnit === 'B-06-01');
+
+  const countBefore = c.state().orders.length;
+  let badOk = true;
+  for (const u of ['A-12-04', 'B-06-02', 'A-99-99', 'a-12-3']) {
+    await c.register(u, 'BAD-' + u);
+    badOk = badOk && /is not a configured demo resident/.test(c.text()) && c.text().includes('"' + u.toUpperCase() + '"') && units.every((x) => c.text().includes(x)) && !c.order('BAD-' + u);
+  }
+  check('RES', 'Unknown unit numbers are rejected with a clear error that names the unit and lists the valid ones',
+    badOk && c.state().orders.length === countBefore);
+  await c.logout();
+
+  let isolated = true;
+  for (const a of L.demoLogins().filter((x) => x.role === 'RESIDENT')) {
+    await c.login(a.username, a.password);
+    const t = c.text();
+    const mineVisible = t.includes('UNIT-' + a.unitNumber) && t.includes(a.unitNumber);
+    const othersHidden = units.filter((u) => u !== a.unitNumber).every((u) => !t.includes('UNIT-' + u));
+    if (!(c.hash() === '#/resident' && mineVisible && othersHidden)) { isolated = false; console.log('      isolation problem for ' + a.username); }
+    await c.logout();
+  }
+  check('RES', 'Each of the 8 residents logs in and sees only the deliveries for their own unit', isolated);
+
+  // ---------------------------------------------------------------- Upgrade: browser already holds data from before
+  const oldState = L.newState();
+  L.seed(oldState, null, Date.now(), Math.random);
+  const gd = L.getUserById('u-staff01');
+  const kept = L.registerDelivery(oldState, gd, { unit: 'A-12-05', ref: 'OLD-1', note: 'kept' }, Date.now()).order;
+  L.verifyCode(oldState, gd, kept.collectionCode, Date.now());
+  L.completeCollection(oldState, gd, kept.orderId, Date.now());
+  const pend = L.registerDelivery(oldState, gd, { unit: 'A-12-03', ref: 'OLD-2' }, Date.now()).order;
+  L.addTest(oldState, gd, { participant: 'OldP', condition: 'with', correct: true, seconds: 9 });
+  L.setOverdueMinutes(oldState, gd, 20, Date.now());
+  const oldJson = JSON.stringify(oldState);
+
+  const up = await boot({ local: { [STATE_KEY]: oldJson }, hash: '#/login' });
+  await up.login('staff01', 'Staff123!');
+  const afterLogin = up.state();
+  check('UPG', 'Existing saved data is loaded as it was (orders, codes, collected records, test results, overdue limit all unchanged)',
+    JSON.stringify(afterLogin.orders) === JSON.stringify(oldState.orders) && JSON.stringify(afterLogin.tests) === JSON.stringify(oldState.tests) &&
+    afterLogin.settings.overdueMinutes === 20 && afterLogin.orders.some((o) => o.orderReference === 'OLD-1' && o.status === 'COLLECTED' && o.collectionTime === kept.collectionTime || false));
+  check('UPG', 'The activity history from before is still there', oldState.audit.every((e) => afterLogin.audit.some((x) => x.logId === e.logId && x.message === e.message)));
+
+  await up.register('B-06-01', 'NEW-AFTER-UPGRADE', 'new resident, old data');
+  const afterReg = up.state();
+  check('UPG', 'A new resident\'s unit works on top of the old data, and nothing old was lost or reset',
+    up.order('NEW-AFTER-UPGRADE') && afterReg.orders.length === oldState.orders.length + 1 &&
+    oldState.orders.every((o) => JSON.stringify(afterReg.orders.find((x) => x.orderId === o.orderId)) === JSON.stringify(o)));
+  await up.logout();
+  await up.login('resident08', 'Resident008!');
+  check('UPG', 'The new resident logs in and sees the delivery registered after the upgrade', up.hash() === '#/resident' && /NEW-AFTER-UPGRADE/.test(up.text()) && !/OLD-2/.test(up.text()));
+  await up.logout();
+  await up.login('resident01', 'Resident123!');
+  check('UPG', 'An existing resident still sees their old pending delivery with the same code', /OLD-2/.test(up.text()) && up.$$('.code').some((e) => e.textContent.trim() === pend.collectionCode));
+  await up.logout();
+  await up.login('staff01', 'Staff123!');
+  await up.click(up.$('[data-action="demo-reset"]'));
+  const afterResetUp = up.state();
+  check('UPG', 'Reset still works on upgraded data (orders and log cleared, test results kept) and new residents can still be used',
+    afterResetUp.orders.length === 0 && afterResetUp.tests.length === 1);
+  await up.register('A-13-05', 'POST-RESET-1');
+  check('UPG', 'Registering for a new resident after a reset works', !!up.order('POST-RESET-1'));
+
   check('EXTRA', 'No script errors in any test page', scriptErrors.length === 0, scriptErrors.join(' | '));
 
   // ---------------------------------------------------------------- summary
@@ -308,7 +389,7 @@ function check(id, desc, cond, detail) {
     rows.push({ id, status, checks: mine.length, text: mine.map((r) => r.desc).join(' / ') });
     console.log('  ' + id + '  ' + status + '  (' + mine.length + ' check' + (mine.length === 1 ? '' : 's') + ')');
   });
-  const extras = results.filter((r) => r.id === 'EXTRA');
+  const extras = results.filter((r) => !/^T\d\d$/.test(r.id));
   const failed = results.filter((r) => !r.pass);
   console.log('\n' + results.length + ' checks, ' + failed.length + ' failed. Extra checks: ' + extras.filter((r) => r.pass).length + '/' + extras.length + ' passed.');
 

@@ -93,7 +93,6 @@
     forbidden: 'Your account is not allowed to do that.',
     not_authenticated: 'Please log in again.',
     unit_required: 'Enter the resident unit number.',
-    invalid_unit: 'That unit is not in this prototype. Use ',
     ref_required: 'Enter the order reference.',
     ref_too_long: 'The order reference is too long (40 characters at most).',
     note_too_long: 'The note is too long (140 characters at most).',
@@ -114,7 +113,7 @@
     bad_seconds: 'Enter the time in seconds.'
   };
   function reasonText(reason) {
-    if (reason === 'invalid_unit') return REASONS.invalid_unit + F.validUnits().join(' or ') + '.';
+    if (reason === 'invalid_unit') return 'That unit is not a configured demo resident. Choose one of: ' + F.validUnits().join(', ') + '.';
     return REASONS[reason] || 'That did not work.';
   }
 
@@ -248,8 +247,11 @@
       '<p class="muted">The arrival time is recorded automatically, and a collection code is created for the resident.</p>' +
       '<div class="row"><div><label for="r-unit">Resident unit number</label>' +
       '<input id="r-unit" list="units" autocomplete="off" placeholder="e.g. ' + esc(F.validUnits()[0]) + '" value="' + esc(d.unit) + '">' +
-      '<datalist id="units">' + F.validUnits().map(function (u) { return '<option value="' + esc(u) + '">'; }).join('') + '</datalist></div>' +
+      '<datalist id="units">' + F.residentDirectory().map(function (r) {
+        return '<option value="' + esc(r.unitNumber) + '" label="' + esc(r.displayName) + '">';
+      }).join('') + '</datalist></div>' +
       '<div><label for="r-ref">Order reference</label><input id="r-ref" autocomplete="off" maxlength="40" placeholder="e.g. FS-2041" value="' + esc(d.ref) + '"></div></div>' +
+      '<p id="unit-hint" class="muted small" style="margin:8px 0 0">Demo residents: ' + F.validUnits().map(esc).join(', ') + '</p>' +
       '<label for="r-note">Delivery note (optional)</label><input id="r-note" autocomplete="off" maxlength="140" value="' + esc(d.note) + '">' +
       '<p style="margin:14px 0 0"><button type="submit">Register delivery</button> <a class="btnlink ghost" href="#/staff">Cancel</a></p>' +
       msgHtml(ui.regMsg) + '</form></div>';
@@ -518,6 +520,8 @@
       if (rr.ok) {
         ui.regMsg = { kind: 'ok', text: 'Registered ' + rr.order.orderReference + ' for unit ' + rr.order.residentUnit + '. The resident can now see it.' };
         ui.regDraft = { unit: '', ref: '', note: '' };
+      } else if (rr.reason === 'invalid_unit') {
+        ui.regMsg = { kind: 'bad', text: 'Unit "' + ui.regDraft.unit.trim().toUpperCase().slice(0, 20) + '" is not a configured demo resident. Choose one of: ' + F.validUnits().join(', ') + '.' };
       } else {
         ui.regMsg = { kind: 'bad', text: reasonText(rr.reason) };
       }

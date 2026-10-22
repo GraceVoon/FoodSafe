@@ -30,11 +30,32 @@ function wrongCode(order) { return order.collectionCode === '123456' ? '654321' 
 
 console.log('Accounts and login');
 
-t('three demo accounts: one staff, two residents with different units', () => {
+t('demo accounts: one staff and eight residents, each resident with their own unit', () => {
   const l = F.demoLogins();
-  assert.strictEqual(l.length, 3);
+  assert.strictEqual(l.length, 9);
   assert.strictEqual(l.filter(a => a.role === 'STAFF').length, 1);
-  assert.notStrictEqual(l[1].unitNumber, l[2].unitNumber);
+  const res = l.filter(a => a.role === 'RESIDENT');
+  assert.strictEqual(res.length, 8);
+  assert.strictEqual(new Set(res.map(a => a.unitNumber)).size, 8);
+  assert.strictEqual(new Set(l.map(a => a.username)).size, 9);
+  assert.deepStrictEqual(F.accountProblems(), []);
+});
+
+t('the configured units are exactly the ones planned, and the registration list is built from them', () => {
+  const planned = ['A-12-03', 'A-12-05', 'A-12-07', 'A-13-02', 'A-13-05', 'B-05-03', 'B-05-06', 'B-06-01'];
+  assert.deepStrictEqual(F.validUnits().slice().sort(), planned.slice().sort());
+  assert.deepStrictEqual(F.residentDirectory().map(r => r.unitNumber), F.validUnits());
+  F.residentDirectory().forEach(r => assert.ok(r.displayName));
+});
+
+t('every demo resident can log in and gets the RESIDENT role with their own unit', () => {
+  const s = fresh();
+  F.demoLogins().filter(a => a.role === 'RESIDENT').forEach(a => {
+    const r = F.login(s, a.username, a.password, T0);
+    assert.ok(r.ok, a.username);
+    assert.strictEqual(r.user.role, 'RESIDENT');
+    assert.strictEqual(r.user.unitNumber, a.unitNumber);
+  });
 });
 
 t('valid logins return the role stored on the account', () => {
@@ -163,6 +184,27 @@ t('codes are unique across 300 orders and their authorisation codes', () => {
     codes.add(d.delegation.code);
   }
   assert.strictEqual(codes.size, 600);
+});
+
+t('staff can register a delivery for every configured unit, and only that resident sees it', () => {
+  const s = fresh();
+  F.validUnits().forEach(u => reg(s, 'REF-' + u, u));
+  assert.strictEqual(s.orders.length, 8);
+  F.demoLogins().filter(a => a.role === 'RESIDENT').forEach(a => {
+    const me = F.getUserById('u-res0' + a.username.slice(-1));
+    const r = F.residentOrders(s, me);
+    assert.strictEqual(r.unit, a.unitNumber);
+    assert.deepStrictEqual(r.pending.map(o => o.orderReference), ['REF-' + a.unitNumber]);
+  });
+});
+
+t('units that are not configured residents are still rejected, whatever they look like', () => {
+  const s = fresh();
+  ['A-12-04', 'A-12-3', 'A12-03', 'B-06-02', 'C-01-01', 'A-99-99', 'A-12-03 x', '0', 'DROP TABLE'].forEach(u => {
+    assert.strictEqual(F.registerDelivery(s, staff, { unit: u, ref: 'X-' + u }, T0).reason, 'invalid_unit', u);
+  });
+  assert.strictEqual(s.orders.length, 0);
+  assert.strictEqual(F.registerDelivery(s, staff, { unit: ' b-06-01 ', ref: 'OK-1' }, T0).order.residentUnit, 'B-06-01');
 });
 
 console.log('Verify, then confirm');
@@ -406,6 +448,16 @@ t('load demo data: 4 orders (1 collected), one overdue now, a second after +5 mi
   assert.strictEqual(F.summary(s, staff, T0 + 5 * MIN).overdue, 2);
   assert.strictEqual(new Set(s.orders.map(o => o.collectionCode)).size, 4);
   s.orders.forEach(o => { if (o.status === 'COLLECTED') assert.ok(o.collectionTime != null && o.codeUsed); });
+});
+
+t('saved orders from before the new residents were added still load (units only grew)', () => {
+  const s = fresh();
+  F.loadDemo(s, staff, T0);
+  const saved = JSON.parse(JSON.stringify(s));
+  const back = F.normalizeState(saved);
+  assert.ok(back);
+  assert.strictEqual(back.orders.length, 4);
+  assert.deepStrictEqual(back.orders.map(o => o.collectionCode), s.orders.map(o => o.collectionCode));
 });
 
 t('demo data matches both residents (A-12-03 has pending and history)', () => {

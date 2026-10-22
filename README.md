@@ -18,8 +18,18 @@ The idea was inspired by a widely shared video of a food theft in a Singapore co
 | Staff / guard | `staff01` | `Staff123!` | none |
 | Resident | `resident01` | `Resident123!` | A-12-03 |
 | Resident | `resident02` | `Resident456!` | A-12-05 |
+| Resident | `resident03` | `Resident003!` | A-12-07 |
+| Resident | `resident04` | `Resident004!` | A-13-02 |
+| Resident | `resident05` | `Resident005!` | A-13-05 |
+| Resident | `resident06` | `Resident006!` | B-05-03 |
+| Resident | `resident07` | `Resident007!` | B-05-06 |
+| Resident | `resident08` | `Resident008!` | B-06-01 |
 
-They are defined in one place, the `ACCOUNTS` list at the top of `logic.js`, and shown on the login page. Each account has one fixed role. The role comes from the account, never from a button, the address bar or browser storage. To try the other role, log out and log in with the other account, or open a second tab (each tab has its own login, and they share the same orders).
+The residents are fictional. They are defined in one place, the `ACCOUNTS` list at the top of `logic.js`, and shown on the login page. The unit list that staff can register deliveries for is built from the same list, so a unit works for deliveries exactly when a resident account has it. There is one account per unit. Each account has one fixed role. The role comes from the account, never from a button, the address bar or browser storage. To try the other role, log out and log in with the other account, or open a second tab (each tab has its own login, and they share the same orders).
+
+### Adding another demo resident
+
+Copy one resident line in `ACCOUNTS` (`logic.js`) and change the `userId`, `username`, `password`, `unitNumber` (form `A-12-03`) and `displayName`. Nothing else needs editing: the registration list, hint and validation pick it up. Run `node test.js`, which checks for duplicate usernames, ids and units. Residents live in the code, not in browser storage, so adding one never touches saved deliveries.
 
 ## What each role can do
 
@@ -37,7 +47,7 @@ Pages are protected in three ways: unauthenticated visitors are sent to the logi
 
 ## How the workflow runs
 
-1. **Staff register a delivery.** Arrival time is recorded automatically and a unique 6-digit code is created for the resident. The order reference must be unique, and the unit must be one of the prototype's residents' units.
+1. **Staff register a delivery.** Arrival time is recorded automatically and a unique 6-digit code is created for the resident. The order reference must be unique, and the unit must belong to a configured demo resident (the form lists them). An unknown unit is rejected with a message that names it and lists the valid ones.
 2. **Resident logs in** and sees the order, code, arrival time and waiting time.
 3. **Staff verify the code** the person gives them. A good code shows the order and unit. Nothing is collected yet.
 4. **Staff confirm the handoff.** The order becomes `COLLECTED`, the time is recorded and the code can never be used again. Typing a code alone never collects an order.
@@ -72,7 +82,9 @@ No install needed: open `index.html` in a browser. Data is saved in that browser
 1. Open the repository on GitHub and choose **Add file, Upload files**.
 2. Drag in everything from this folder. Files with the same name (`index.html`, `style.css`, `app.js`, `logic.js`, `test.js`, `README.md`) are replaced, and `test-ui.js`, `package.json`, `.gitignore` and `TEST_REPORT.md` are new.
 3. Write a commit message such as "Add login, roles and verified collection" and commit to `main`.
-4. Wait about a minute for GitHub Pages to update, then refresh the site with **Ctrl+Shift+R** (Cmd+Shift+R on Mac) so the browser does not show the old version.
+4. Wait about a minute for GitHub Pages to update, then refresh the site with **Ctrl+Shift+R** (Cmd+Shift+R on Mac) so the browser does not show the old version. If the unit list still shows only two units, the browser is still using the old files: hard-refresh again or open the site in a private window.
+
+**Existing deliveries are kept.** Residents are not saved in the browser, so people who already used the site keep their orders, collected records, activity log and test results, and simply see the new residents after the files update. Nothing is reset or re-seeded automatically. (Use **Load sample data** or **Reset demo data** only if you want that.)
 
 **New repository:** create a public repository, upload all files, then **Settings, Pages, Deploy from a branch, `main`, `/ (root)`, Save**. Your site will be at `https://<your-username>.github.io/<repository-name>/`.
 
@@ -81,9 +93,9 @@ Old data from the first version is ignored (this version saves under a new name)
 ## Tests
 
 ```
-node test.js          # 42 rule checks, needs only Node.js
+node test.js          # 47 rule checks, needs only Node.js
 npm install           # once, installs jsdom (a browser simulator) for the next command
-node test-ui.js       # the 26 cases T01-T26 plus extras, run against the real pages
+node test-ui.js       # the 26 cases T01-T26 plus checks for the 8 residents and for upgrading saved data, run against the real pages
 node test-ui.js --report   # same, and writes TEST_REPORT.md
 ```
 
