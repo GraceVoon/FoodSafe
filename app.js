@@ -152,7 +152,7 @@
 
   function frame(user, path, inner) {
     var notice = ui.notice; ui.notice = null;
-    var h = '<div class="wrap"><header class="top"><p class="brand"><a href="#/">FoodSafe</a></p>';
+    var h = '<div class="wrap"><header class="top"><p class="brand"><a href="#/" aria-label="FoodSafe home"><img class="brand-mascot" src="assets/foodsafe-mascot.png" alt=""><span>FoodSafe</span></a></p>';
     if (user) {
       h += '<div class="who"><span class="name">' + esc(user.displayName) + '</span>' +
         '<span class="role">' + roleLabel(user) + (user.unitNumber ? ' · ' + esc(user.unitNumber) : '') + '</span>';
@@ -171,8 +171,9 @@
   // Login
   // ---------------------------------------------------------------------------------------------
   function renderLogin() {
-    var h = '<section class="card login"><h1><span class="logo">F</span>FoodSafe</h1>' +
-      '<p class="muted">Secure food handoff for residential communities.</p>' +
+    var h = '<section class="card login"><img class="login-logo" src="assets/foodsafe-logo.png" alt="FoodSafe logo: a friendly delivery box mascot">' +
+      '<h1 class="login-title">FoodSafe</h1>' +
+      '<p class="muted">A more accountable food handover for residential communities.</p>' +
       '<form id="form-login" novalidate>' +
       '<label for="l-user">Username</label><input id="l-user" autocomplete="username" autocapitalize="none" spellcheck="false" value="' + esc(ui.loginDraft) + '">' +
       '<label for="l-pass">Password</label><div class="pw"><input id="l-pass" type="password" autocomplete="current-password">' +
@@ -255,8 +256,8 @@
       '<div class="stat overdue"><div class="muted">Overdue</div><div class="big" id="n-overdue">' + sm.overdue + '</div></div>' +
       '<div class="stat"><div class="muted">Collected</div><div class="big" id="n-collected">' + sm.collected + '</div></div>' +
       '<div class="stat"><div class="muted">Disposed</div><div class="big" id="n-disposed">' + sm.disposed + '</div></div></div>';
-    h += '<div class="actions" style="margin-top:12px"><a class="btnlink" href="#/staff/register">Register delivery</a>' +
-      '<a class="btnlink ghost" href="#/staff/verify">Verify collection</a><a class="btnlink ghost" href="#/staff/log">Activity log</a></div>';
+    // Keep the dashboard focused on queue status and follow-up. Primary tasks remain
+    // available in the staff navigation, so duplicate shortcut buttons are unnecessary.
 
     var fc = followCardHtml(user);
     // The outcome message normally sits in the overdue card; if that was the last overdue delivery the card is gone, so show it here.
