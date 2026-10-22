@@ -171,7 +171,7 @@
   // Login
   // ---------------------------------------------------------------------------------------------
   function renderLogin() {
-    var h = '<section class="card login"><img class="login-logo" src="foodsafe-logo.png" alt="FoodSafe logo">' +
+    var h = '<section class="card login"><img class="login-logo" src="foodsafe-logo.png" alt="FoodSafe logo: a friendly delivery box mascot">' +
       '<h1 class="login-title">FoodSafe</h1>' +
       '<p class="muted">A more accountable food handover for residential communities.</p>' +
       '<form id="form-login" novalidate>' +
