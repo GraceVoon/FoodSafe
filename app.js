@@ -17,7 +17,7 @@
     regDraft: { unit: '', ref: '', note: '' }, regMsg: null,
     verifyMsg: null, verified: null, expectedOrderId: null, keepExpected: false,
     filter: 'pending', query: '', logQuery: '', logType: 'all',
-    resMsg: {}, testMsg: null, demoMsg: null, lastPath: null
+    resMsg: {}, testMsg: null, demoMsg: null, followMsg: null, lastPath: null
   };
   var pendingRender = false;
   var memSession = null;
@@ -110,7 +110,10 @@
     bad_duration: 'Choose a whole number of minutes between 5 and 240.',
     bad_minutes: 'Enter a whole number of minutes in the allowed range.',
     participant_required: 'Enter a participant name.',
-    bad_seconds: 'Enter the time in seconds.'
+    bad_seconds: 'Enter the time in seconds.',
+    already_disposed: 'That delivery was already disposed of. Do not hand it over.',
+    not_overdue: 'That delivery is not overdue, so this action is not available.',
+    already_in_holding: 'That delivery is already recorded as moved to the holding area.'
   };
   function reasonText(reason) {
     if (reason === 'invalid_unit') return 'That unit is not a configured demo resident. Choose one of: ' + F.validUnits().join(', ') + '.';
@@ -122,13 +125,17 @@
     delivery_registered: 'Delivery registered', verify_success: 'Code verified', verify_failed: 'Invalid code attempt',
     collected: 'Collection successful', collect_failed: 'Collection failed', delegation_created: 'Collector authorised',
     access_denied: 'Access denied', demo_loaded: 'Demo data loaded', demo_reset: 'Demo reset',
-    demo_clock: 'Demo clock moved', demo_threshold: 'Overdue limit changed'
+    demo_clock: 'Demo clock moved', demo_threshold: 'Overdue limit changed',
+    reminder_generated: 'Collection reminder generated', marked_overdue: 'Delivery marked overdue',
+    followup_reminder: 'Follow-up: reminder sent', followup_contact: 'Follow-up: resident contacted',
+    followup_holding: 'Follow-up: moved to holding area', disposed: 'Delivery disposed'
   };
 
+  // One status for every screen, from F.deliveryStatus (Pending Collection / Overdue / Collected / Disposed).
   function statusBadge(order, t) {
-    if (order.status === F.COLLECTED) return '<span class="badge done">Collected</span>';
-    if (F.isOverdue(order, t, state.settings.overdueMinutes)) return '<span class="badge overdue">Pending · Overdue</span>';
-    return '<span class="badge">Pending</span>';
+    var st = F.deliveryStatus(order, t, state.settings.overdueMinutes);
+    var cls = { PENDING: '', OVERDUE: ' overdue', COLLECTED: ' done', DISPOSED: ' disposed' }[st];
+    return '<span class="badge' + cls + '">' + esc(F.STATUS_LABELS[st]) + '</span>';
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -191,7 +198,7 @@
     var r = F.queue(state, user, { filter: ui.filter, query: ui.query }, t);
     if (!r.ok) return msgHtml({ kind: 'bad', text: reasonText(r.reason) });
     if (!r.orders.length) {
-      return '<p class="empty">' + (ui.query ? 'No orders match that search.' : ui.filter === 'collected' ? 'No collected orders yet.' :
+      return '<p class="empty">' + (ui.query ? 'No orders match that search.' : ui.filter === 'collected' ? 'No collected orders yet.' : ui.filter === 'disposed' ? 'No disposed orders.' :
         ui.filter === 'overdue' ? 'No overdue orders.' : 'No orders in this list. Register a delivery to get started.') + '</p>';
     }
     var h = '<div class="tablewrap"><table><thead><tr><th>Order</th><th>Unit</th><th>Arrived</th><th>Waiting</th><th>Status</th><th>Action</th></tr></thead><tbody>';
@@ -200,27 +207,63 @@
         '<td>' + esc(o.residentUnit) + '</td><td>' + fmtTime(o.arrivalTime) + '</td><td>' + F.waitingMinutes(o, t) + ' min</td><td>' + statusBadge(o, t) + '</td><td>' +
         (o.status === F.PENDING
           ? '<button class="ghost" data-action="verify-order" data-id="' + o.orderId + '">Verify code</button>'
+          : o.status === F.DISPOSED ? '<span class="muted">Disposed ' + fmtTime(o.disposedTime) + '</span>'
           : '<span class="muted">Collected ' + fmtTime(o.collectionTime) + '</span>') + '</td></tr>';
     });
     return h + '</tbody></table></div>';
   }
 
+  // What staff have already done for one overdue delivery, as short labels.
+  function followChips(o) {
+    var f = F.followUpInfo(o);
+    var chips = [];
+    if (f.reminders) chips.push('Reminder sent' + (f.reminders > 1 ? ' ×' + f.reminders : '') + ' (last ' + fmtTime(f.lastReminderAt) + ')');
+    if (f.contacts) chips.push('Resident contacted' + (f.contacts > 1 ? ' ×' + f.contacts : '') + ' (last ' + fmtTime(f.lastContactAt) + ')');
+    if (f.heldAt) chips.push('In holding area since ' + fmtTime(f.heldAt));
+    if (!chips.length) return '<span class="muted small">No follow-up recorded yet.</span>';
+    return chips.map(function (c) { return '<span class="chip">' + esc(c) + '</span>'; }).join(' ');
+  }
+
+  function followCardHtml(user) {
+    var t = now();
+    var r = F.queue(state, user, { filter: 'overdue' }, t);
+    if (!r.ok || !r.orders.length) return '';
+    var limit = state.settings.overdueMinutes;
+    var h = '<section class="card overdue-card" id="overdue-card" aria-label="Overdue deliveries"><h2>Overdue deliveries to follow up</h2>' +
+      '<p class="muted">The resident has already been sent an overdue notice. Food is never disposed of automatically: it stays here until it is collected or a staff member chooses to dispose of it under the building procedure.</p>' +
+      msgHtml(ui.followMsg);
+    r.orders.forEach(function (o) {
+      var id = ' data-id="' + o.orderId + '"';
+      h += '<div class="followitem"><div class="order-head"><span class="title">' + esc(o.orderReference) + ' · Unit ' + esc(o.residentUnit) + '</span>' + statusBadge(o, t) + '</div>' +
+        '<p class="muted" style="margin:2px 0 6px">Arrived ' + fmtTime(o.arrivalTime) + ', due by ' + fmtTime(F.deadlineTime(o, limit)) + ', waiting ' + F.waitingMinutes(o, t) + ' min' +
+        (o.deliveryNote ? ' · ' + esc(o.deliveryNote) : '') + '</p>' +
+        '<div class="chips">' + followChips(o) + '</div>' +
+        '<div class="actions" style="margin:8px 0 0">' +
+        '<button' + id + ' data-action="verify-order">Collect (verify code)</button>' +
+        '<button class="ghost"' + id + ' data-action="followup-remind">Send reminder</button>' +
+        '<button class="ghost"' + id + ' data-action="followup-contact">Record contact</button>' +
+        (F.followUpInfo(o).heldAt ? '' : '<button class="ghost"' + id + ' data-action="followup-hold">Moved to holding area</button>') +
+        '<button class="ghost danger"' + id + ' data-action="followup-dispose">Mark as Disposed</button></div></div>';
+    });
+    return h + '</section>';
+  }
+
   function renderStaffHome(user) {
     var sm = F.summary(state, user, now());
     var h = '<h1 class="page">Staff dashboard</h1>' +
-      '<div class="cards3"><div class="stat"><div class="muted">Pending</div><div class="big" id="n-pending">' + sm.pending + '</div></div>' +
+      '<div class="cards3"><div class="stat"><div class="muted">Pending Collection</div><div class="big" id="n-pending">' + sm.onTime + '</div></div>' +
       '<div class="stat overdue"><div class="muted">Overdue</div><div class="big" id="n-overdue">' + sm.overdue + '</div></div>' +
-      '<div class="stat"><div class="muted">Collected</div><div class="big" id="n-collected">' + sm.collected + '</div></div></div>';
-    if (sm.overdue) {
-      h += '<div class="msg warn" role="alert"><strong>' + sm.overdue + ' order' + (sm.overdue > 1 ? 's have' : ' has') + ' been waiting ' +
-        state.settings.overdueMinutes + ' minutes or more.</strong> They stay pending until collected.</div>';
-    }
+      '<div class="stat"><div class="muted">Collected</div><div class="big" id="n-collected">' + sm.collected + '</div></div>' +
+      '<div class="stat"><div class="muted">Disposed</div><div class="big" id="n-disposed">' + sm.disposed + '</div></div></div>';
     h += '<div class="actions" style="margin-top:12px"><a class="btnlink" href="#/staff/register">Register delivery</a>' +
       '<a class="btnlink ghost" href="#/staff/verify">Verify collection</a><a class="btnlink ghost" href="#/staff/log">Activity log</a></div>';
 
+    var fc = followCardHtml(user);
+    // The outcome message normally sits in the overdue card; if that was the last overdue delivery the card is gone, so show it here.
+    h += fc || (ui.followMsg ? '<div class="notice">' + msgHtml(ui.followMsg) + '</div>' : '');
     h += '<div class="card"><h2>Delivery queue</h2><div class="row">' +
       '<div><label for="q-filter">Show</label><select id="q-filter">' +
-      [['pending', 'Awaiting collection'], ['overdue', 'Overdue'], ['collected', 'Collected'], ['all', 'All orders']].map(function (o) {
+      [['pending', 'Awaiting collection'], ['overdue', 'Overdue'], ['collected', 'Collected'], ['disposed', 'Disposed'], ['all', 'All orders']].map(function (o) {
         return '<option value="' + o[0] + '"' + (ui.filter === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
       }).join('') + '</select></div>' +
       '<div><label for="q-search">Search by order reference or unit</label><input id="q-search" value="' + esc(ui.query) + '" autocomplete="off"></div></div>' +
@@ -352,19 +395,42 @@
   // ---------------------------------------------------------------------------------------------
   // Resident dashboard
   // ---------------------------------------------------------------------------------------------
+  // Wording for each simulated notification (the stored record only holds the type, delivery, unit and times).
+  function notifHtml(n) {
+    var head = { reminder: 'Collection reminder', overdue: 'Overdue', staff_reminder: 'Reminder from staff', disposed: 'Delivery disposed' }[n.type] || 'Notification';
+    var body = {
+      reminder: 'Please collect it by ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the collection time') + ' so the food stays fresh.',
+      overdue: 'The collection time passed at ' + (n.dueAt != null ? fmtTime(n.dueAt) : 'the deadline') + '. Please collect it promptly.',
+      staff_reminder: 'This delivery is overdue. Please collect it promptly.',
+      disposed: 'Building staff marked this delivery as disposed after it was not collected. Ask the guard house if you have questions.'
+    }[n.type] || '';
+    return '<li class="notif ' + esc(n.type) + '"><div><strong>' + esc(head) + '</strong> · ' + esc(n.orderReference) + ' · Unit ' + esc(n.unit) +
+      ' <span class="muted small">' + fmtTime(n.createdAt) + '</span></div><div>' + esc(body) + '</div></li>';
+  }
+
   function renderResident(user) {
     var t = now();
+    var limit = state.settings.overdueMinutes;
     var r = F.residentOrders(state, user);
-    var h = '<h1 class="page">Welcome, ' + esc(user.displayName) + '</h1><p class="muted" style="margin-top:-4px">Your unit: <strong>' + esc(user.unitNumber) + '</strong></p>';
+    var nr = F.residentNotifications(state, user);
+    var h = '<h1 class="page">Welcome, ' + esc(user.displayName) + '</h1><p class="muted" style="margin-top:-4px">Your unit: <strong>' + esc(user.unitNumber) + '</strong></p>' +
+      '<p class="muted">Please collect each delivery within ' + limit + ' minutes of arrival. You will get a reminder first. Food left longer is overdue and needs to be collected promptly.</p>';
+
+    if (nr.ok && nr.notifications.length) {
+      h += '<div class="card" id="notifications"><h2>Notifications</h2><ul class="notifs">' +
+        nr.notifications.slice(0, 6).map(notifHtml).join('') + '</ul>' +
+        (nr.notifications.length > 6 ? '<p class="muted small" style="margin:6px 0 0">Showing the latest 6 of ' + nr.notifications.length + '.</p>' : '') +
+        '<p class="muted small" style="margin:8px 0 0">Demo only: a real system would send these to your phone.</p></div>';
+    }
 
     h += '<h2 style="font-size:18px">Pending deliveries</h2>';
     if (!r.pending.length) h += '<div class="card"><p class="empty">Nothing is waiting for you right now.</p></div>';
     r.pending.forEach(function (o) {
-      var over = F.isOverdue(o, t, state.settings.overdueMinutes);
-      h += '<div class="card"><div class="order-head"><span class="title">' + esc(o.orderReference) + '</span>' + statusBadge(o, t) + '</div>' +
-        '<dl class="facts"><dt>Arrived</dt><dd>' + fmtTime(o.arrivalTime) + '</dd><dt>Waiting</dt><dd>' + F.waitingMinutes(o, t) + ' min</dd>' +
+      var over = F.isOverdue(o, t, limit);
+      h += '<div class="card' + (over ? ' overdue-card' : '') + '"><div class="order-head"><span class="title">' + esc(o.orderReference) + '</span>' + statusBadge(o, t) + '</div>' +
+        '<dl class="facts"><dt>Arrived</dt><dd>' + fmtTime(o.arrivalTime) + '</dd><dt>Collect by</dt><dd>' + fmtTime(F.deadlineTime(o, limit)) + '</dd><dt>Waiting</dt><dd>' + F.waitingMinutes(o, t) + ' min</dd>' +
         (o.deliveryNote ? '<dt>Note</dt><dd>' + esc(o.deliveryNote) + '</dd>' : '') + '</dl>';
-      if (over) h += '<div class="msg warn">This has been waiting ' + state.settings.overdueMinutes + ' minutes or more. Please collect it soon, or authorise someone below.</div>';
+      if (over) h += '<div class="msg warn"><strong>Overdue.</strong> The collection time has passed. Please collect this delivery promptly so the food stays safe to eat, or authorise someone below to collect it. Staff may contact you.</div>';
       h += '<p style="margin:10px 0 0">Show this code to the guard:</p><div class="code" aria-label="Your collection code">' + esc(o.collectionCode) + '</div>' +
         '<p class="muted small">Demo only: a real system would send this code to your phone.</p>';
       var d = F.activeDelegation(o, t);
@@ -381,9 +447,11 @@
     h += '<h2 style="font-size:18px">Collection history</h2><div class="card">';
     if (!r.history.length) h += '<p class="empty">No collected deliveries yet.</p>';
     else {
-      h += '<div class="tablewrap"><table><thead><tr><th>Order</th><th>Arrived</th><th>Collected</th><th>Collected by</th></tr></thead><tbody>';
+      h += '<div class="tablewrap"><table><thead><tr><th>Order</th><th>Arrived</th><th>Outcome</th><th>Time</th><th>Details</th></tr></thead><tbody>';
       r.history.forEach(function (o) {
-        h += '<tr><td>' + esc(o.orderReference) + '</td><td>' + fmtTime(o.arrivalTime) + '</td><td>' + fmtTime(o.collectionTime) + '</td><td>' + esc(o.collectedBy) + '</td></tr>';
+        var disposed = o.status === F.DISPOSED;
+        h += '<tr><td>' + esc(o.orderReference) + '</td><td>' + fmtTime(o.arrivalTime) + '</td><td>' + statusBadge(o, t) + '</td><td>' +
+          fmtTime(disposed ? o.disposedTime : o.collectionTime) + '</td><td>' + (disposed ? 'Disposed by building staff' : esc(o.collectedBy)) + '</td></tr>';
       });
       h += '</tbody></table></div>';
     }
@@ -401,12 +469,14 @@
       '<li><strong>Residents log in</strong> and see their own deliveries, the code, and how long the food has been waiting. They can authorise someone else for a limited time.</li>' +
       '<li><strong>Staff verify the code</strong> the person gives them. A good code shows the order and unit, and nothing is handed over yet.</li>' +
       '<li><strong>Staff confirm the handoff.</strong> The order becomes collected, the time is recorded and the code can never be used again.</li>' +
-      '<li>Food that waits too long is flagged as overdue. It stays pending until it is collected.</li></ol></div>' +
+      '<li><strong>Reminders and overdue food.</strong> The resident gets a reminder before the collection time and an overdue notice after it. Staff then follow up (another reminder, contacting the resident, moving it to a holding area). Food is never disposed of automatically: a staff member can mark an overdue delivery as disposed only after confirming it is allowed by the building procedure.</li></ol></div>' +
       '<div class="card"><h2>Who can do what</h2><div class="tablewrap"><table><thead><tr><th></th><th>Staff</th><th>Resident</th></tr></thead><tbody>' +
       '<tr><td>Register deliveries, verify codes, confirm handoffs</td><td>Yes</td><td>No</td></tr>' +
       '<tr><td>See all orders and the activity log</td><td>Yes</td><td>No</td></tr>' +
       '<tr><td>See own unit\'s orders and code</td><td>No</td><td>Yes</td></tr>' +
       '<tr><td>Authorise another collector</td><td>No</td><td>Yes</td></tr>' +
+      '<tr><td>Follow up overdue deliveries (reminder, contact, holding area, disposal)</td><td>Yes</td><td>No</td></tr>' +
+      '<tr><td>See own notifications</td><td>No</td><td>Yes</td></tr>' +
       '<tr><td>Demonstration tools and test log</td><td>Yes</td><td>No</td></tr></tbody></table></div>' +
       '<p class="muted">Each account has one fixed role. To switch role, log out and log in with the other account.</p></div>' +
       '<div class="card"><h2>What it does not do</h2><ul>' +
@@ -444,7 +514,13 @@
     route();
   }
 
+  // Create any reminder / overdue notification that is now due. Idempotent, so it is safe on every render.
+  function syncDue() {
+    if (F.syncNotifications(state, now()) > 0) save();
+  }
+
   function route() {
+    syncDue();
     var user = currentUser();
     var path = currentPath();
     if (!path || path === '/') return redirect(home(user));
@@ -469,7 +545,7 @@
 
     if (path !== ui.lastPath) {                         // moving to another page: drop that page's leftovers
       if (ui.verified && user && user.role === F.STAFF) { F.cancelVerification(state, user); save(); }
-      ui.verified = null; ui.verifyMsg = null; ui.regMsg = null; ui.testMsg = null; ui.demoMsg = null; ui.resMsg = {};
+      ui.verified = null; ui.verifyMsg = null; ui.regMsg = null; ui.testMsg = null; ui.demoMsg = null; ui.followMsg = null; ui.resMsg = {};
       if (!ui.keepExpected) ui.expectedOrderId = null;
       ui.keepExpected = false;
       ui.lastPath = path;
@@ -483,7 +559,7 @@
     ui.loginMsg = null; ui.loginDraft = ''; ui.regDraft = { unit: '', ref: '', note: '' }; ui.regMsg = null;
     ui.verifyMsg = null; ui.verified = null; ui.expectedOrderId = null; ui.keepExpected = false;
     ui.filter = 'pending'; ui.query = ''; ui.logQuery = ''; ui.logType = 'all';
-    ui.resMsg = {}; ui.testMsg = null; ui.demoMsg = null; ui.lastPath = null;
+    ui.resMsg = {}; ui.testMsg = null; ui.demoMsg = null; ui.followMsg = null; ui.lastPath = null;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -598,6 +674,7 @@
       go('/staff/verify');
       return;
     }
+    if (action.indexOf('followup-') === 0) { handleFollowUp(action, Number(b.getAttribute('data-id')), user); return; }
     if (action === 'clear-expected') { ui.expectedOrderId = null; route(); return; }
     if (action === 'cancel-verify') {
       F.cancelVerification(state, user);
@@ -636,6 +713,39 @@
       F.clearTests(state, user); save(); route();
     }
   });
+
+  // Staff follow-up on an overdue delivery. The rules (and every check) live in logic.js; this only words the outcome.
+  function handleFollowUp(action, id, user) {
+    var o = F.findOrder(state, id);
+    var ref = o ? o.orderReference : 'this delivery';
+    var unit = o ? o.residentUnit : '';
+    var res;
+    if (action === 'followup-dispose') {
+      var okToGo = window.confirm('Mark ' + ref + (unit ? ' (unit ' + unit + ')' : '') + ' as disposed?\n\n' +
+        'Only do this when the applicable building procedure allows it for uncollected food. The delivery will be recorded as Disposed, ' +
+        'its collection code will stop working, the resident will be told, and this cannot be undone.\n\nSelect OK to confirm or Cancel to keep the delivery.');
+      if (!okToGo) { ui.followMsg = { kind: 'warn', text: 'Disposal cancelled. ' + ref + ' is unchanged.' }; route(); return; }
+      res = F.disposeDelivery(state, user, id, now());
+    } else if (action === 'followup-remind') res = F.sendStaffReminder(state, user, id, now());
+    else if (action === 'followup-contact') res = F.recordContact(state, user, id, now());
+    else if (action === 'followup-hold') res = F.recordHolding(state, user, id, now());
+    else return;
+
+    if (res.ok) {
+      ui.followMsg = { kind: 'ok', text: {
+        'followup-remind': 'Reminder sent to unit ' + unit + ' for ' + ref + '.',
+        'followup-contact': 'Recorded: staff contacted unit ' + unit + ' about ' + ref + '.',
+        'followup-hold': 'Recorded: ' + ref + ' moved to the holding area.',
+        'followup-dispose': ref + ' is now recorded as disposed. The resident has been told.'
+      }[action] };
+    } else if (res.reason === 'reminder_too_soon' || res.reason === 'contact_too_soon') {
+      ui.followMsg = { kind: 'bad', text: (res.reason === 'reminder_too_soon' ? 'A reminder' : 'A contact') + ' for ' + ref + ' was already recorded at ' + fmtTime(res.lastAt) +
+        '. You can record another from ' + fmtTime(res.retryAt) + '.' };
+    } else {
+      ui.followMsg = { kind: 'bad', text: reasonText(res.reason) };
+    }
+    save(); route();
+  }
 
   document.addEventListener('input', function (e) {
     var id = e.target.id;

@@ -1,4 +1,5 @@
-// End-to-end test of the real pages (index.html + app.js + logic.js) for cases T01-T26 in the spec.
+// End-to-end test of the real pages (index.html + app.js + logic.js): cases T01-T26 in the spec, the eight residents,
+// upgrading saved data, and the overdue workflow (OVD01-OVD11: reminders, overdue, staff follow-up, disposal, refresh).
 // One-time setup:  npm install      (installs jsdom, a browser simulator, for this test only)
 // Run:             node test-ui.js              (add --report to write TEST_REPORT.md)
 const { JSDOM, VirtualConsole } = require('jsdom');
@@ -376,6 +377,197 @@ function check(id, desc, cond, detail) {
     afterResetUp.orders.length === 0 && afterResetUp.tests.length === 1);
   await up.register('A-13-05', 'POST-RESET-1');
   check('UPG', 'Registering for a new resident after a reset works', !!up.order('POST-RESET-1'));
+
+  // ---------------------------------------------------------------- Overdue workflow: reminders, overdue, follow-up, disposal
+  const ov = await boot();
+  await ov.login('staff01', 'Staff123!');
+  await ov.click(ov.$('[data-action="demo-reset"]'));
+  await ov.register('A-12-03', 'OV-1', 'Left at counter');
+  await ov.register('A-12-05', 'OV-2');
+  const ovId = (ref) => ov.order(ref).orderId;
+  const nOf = (ref, type) => ov.state().notifications.filter((n) => n.orderReference === ref && (!type || n.type === type));
+  const logN = (type, ref) => ov.state().audit.filter((e) => e.eventType === type && (!ref || e.orderReference === ref)).length;
+  const asStaff = async () => { await ov.logout(); await ov.login('staff01', 'Staff123!'); };
+  const asRes = async (u, p) => { await ov.logout(); await ov.login(u, p); };
+  const press = async (action, ref) => ov.click(ov.$('[data-action="' + action + '"][data-id="' + ovId(ref) + '"]'));
+
+  await ov.nav('#/staff');
+  const q1 = ov.$('#queue').textContent;
+  check('OVD01', 'A newly registered delivery starts as Pending Collection (stored and shown), with no notification yet',
+    ov.order('OV-1').status === 'PENDING' && /Pending Collection/.test(q1) && !/Overdue/.test(q1) && ov.state().notifications.length === 0);
+  await asRes('resident01', 'Resident123!');
+  const rt1 = ov.text();
+  check('OVD01', 'The resident sees the new delivery as Pending Collection with its collect-by time, and nobody else\'s',
+    /OV-1/.test(rt1) && /Pending Collection/.test(rt1) && /Collect by/.test(rt1) && !/OV-2/.test(rt1) && !/Collection reminder/.test(rt1));
+
+  // reminder time (10 of 15 minutes)
+  await asStaff();
+  await ov.click(ov.$('[data-action="demo-ff10"]'));
+  const rem = nOf('OV-1', 'reminder')[0];
+  check('OVD02', 'Demo clock +10 min: a collection reminder is created for the right delivery and unit, and nothing is overdue yet',
+    nOf('OV-1', 'reminder').length === 1 && nOf('OV-2', 'reminder').length === 1 && rem.unit === 'A-12-03' && nOf('OV-2', 'reminder')[0].unit === 'A-12-05' &&
+    ov.state().notifications.every((n) => n.type === 'reminder') && ov.order('OV-1').status === 'PENDING' && ov.$('#n-overdue').textContent === '0' && !ov.$('#overdue-card'));
+  await asRes('resident01', 'Resident123!');
+  const rt2 = ov.text();
+  await asRes('resident02', 'Resident456!');
+  const rt2b = ov.text();
+  check('OVD02', 'Each resident sees the reminder for their own delivery and unit only',
+    /Collection reminder/.test(rt2) && /OV-1/.test(rt2) && /A-12-03/.test(rt2) && !/OV-2/.test(rt2) &&
+    /Collection reminder/.test(rt2b) && /OV-2/.test(rt2b) && /A-12-05/.test(rt2b) && !/OV-1/.test(rt2b));
+
+  // refresh / reopen
+  async function refreshCheck(label) {
+    const before = ov.state();
+    const snap = { [STATE_KEY]: ov.w.localStorage.getItem(STATE_KEY) };
+    const rf = await boot({ local: snap, session: { [SESSION_KEY]: 'u-staff01' }, hash: '#/staff' });
+    await rf.nav('#/staff/log'); await rf.nav('#/staff'); await rf.nav('#/staff/verify'); await rf.nav('#/staff');
+    const after = rf.state();
+    const keys = after.notifications.map((n) => n.key);
+    const rf2 = await boot({ local: { [STATE_KEY]: rf.w.localStorage.getItem(STATE_KEY) }, session: { [SESSION_KEY]: 'u-res01' }, hash: '#/resident' });
+    await rf2.nav('#/resident');
+    const after2 = rf2.state();
+    check('OVD11', label + ': refreshing and reopening dashboards creates no duplicate notifications or activity entries',
+      after.notifications.length === before.notifications.length && new Set(keys).size === keys.length && after.audit.length === before.audit.length &&
+      after2.notifications.length === before.notifications.length && after2.audit.length === before.audit.length,
+      JSON.stringify({ n: [before.notifications.length, after.notifications.length, after2.notifications.length], a: [before.audit.length, after.audit.length, after2.audit.length] }));
+  }
+  await refreshCheck('After the reminder');
+
+  // overdue (15 minutes)
+  await asStaff();
+  await ov.click(ov.$('[data-action="demo-ff10"]'));
+  const card = ov.$('#overdue-card') ? ov.$('#overdue-card').textContent : '';
+  check('OVD03', 'Demo clock +20 min: both deliveries are Overdue on the staff dashboard (derived status, stored order still PENDING, one overdue notice each)',
+    ov.$('#n-overdue').textContent === '2' && /OV-1/.test(card) && /OV-2/.test(card) && /Overdue/.test(card) && /Unit A-12-03/.test(card) &&
+    ov.order('OV-1').status === 'PENDING' && nOf('OV-1', 'overdue').length === 1 && nOf('OV-2', 'overdue').length === 1 && logN('marked_overdue') === 2 && logN('reminder_generated') === 2);
+  const tableRow = ov.$$('#queue tbody tr').find((tr) => /OV-1/.test(tr.textContent));
+  check('OVD03', 'The overdue delivery is also marked Overdue in the queue, visibly different from Pending Collection', !!tableRow && !!tableRow.querySelector('.badge.overdue') && /Overdue/.test(tableRow.textContent));
+  await asRes('resident01', 'Resident123!');
+  const rt3 = ov.text();
+  await asRes('resident02', 'Resident456!');
+  const rt3b = ov.text();
+  check('OVD04', 'The correct resident sees the overdue notice (delivery and unit named) and is told to collect promptly; the other resident does not see it',
+    /Overdue · OV-1 · Unit A-12-03/.test(rt3) && /collect (it|this delivery) promptly/.test(rt3) && !/OV-2/.test(rt3) &&
+    /Overdue · OV-2 · Unit A-12-05/.test(rt3b) && !/OV-1/.test(rt3b));
+  await refreshCheck('After the overdue notice');
+
+  // staff follow-up
+  await asStaff();
+  await press('followup-remind', 'OV-1');
+  const cardA = ov.$('#overdue-card').textContent;
+  check('OVD05', 'Staff send another reminder: confirmation shown, recorded in the log, the follow-up is visible on the card',
+    /Reminder sent to unit A-12-03 for OV-1/.test(cardA) && /Reminder sent \(last/.test(cardA) && nOf('OV-1', 'staff_reminder').length === 1 && logN('followup_reminder', 'OV-1') === 1);
+  await press('followup-remind', 'OV-1');
+  check('OVD09', 'Sending a second reminder straight away is refused with a clear message and nothing is added',
+    /already recorded at/.test(ov.$('#overdue-card').textContent) && nOf('OV-1', 'staff_reminder').length === 1 && logN('followup_reminder', 'OV-1') === 1);
+  await press('followup-contact', 'OV-1');
+  await press('followup-hold', 'OV-1');
+  const cardB = ov.$('#overdue-card').textContent;
+  check('OVD05', 'Staff record contact and a move to the holding area: both logged and shown, and the holding button is gone',
+    /moved to the holding area/.test(cardB) && /Resident contacted/.test(cardB) && /In holding area since/.test(cardB) && logN('followup_contact', 'OV-1') === 1 && logN('followup_holding', 'OV-1') === 1 &&
+    !ov.$('[data-action="followup-hold"][data-id="' + ovId('OV-1') + '"]') && !!ov.$('[data-action="followup-hold"][data-id="' + ovId('OV-2') + '"]') &&
+    ov.order('OV-1').status === 'PENDING');
+  await ov.nav('#/staff/log');
+  const lg = ov.text();
+  check('OVD05', 'The existing activity log shows registration, reminder, overdue and every follow-up (no separate log)',
+    /Delivery registered/.test(lg) && /Collection reminder generated/.test(lg) && /Delivery marked overdue/.test(lg) && /Follow-up: reminder sent/.test(lg) &&
+    /Follow-up: resident contacted/.test(lg) && /Follow-up: moved to holding area/.test(lg) && /system/.test(lg));
+  await asRes('resident01', 'Resident123!');
+  check('OVD05', 'The resident sees the staff reminder, only on their own page', /Reminder from staff · OV-1 · Unit A-12-03/.test(ov.text()) && !/OV-2/.test(ov.text()));
+
+  // resident collects an overdue delivery (normal code check by staff)
+  const code1ov = ov.order('OV-1').collectionCode;
+  await asStaff();
+  await ov.verify(code1ov);
+  const sawOverdueOrder = /OV-1/.test(ov.text());
+  await ov.click(ov.$('[data-action="confirm"]'));
+  await ov.nav('#/staff');
+  const notifBefore = ov.state().notifications.length;
+  const cardC = ov.$('#overdue-card') ? ov.$('#overdue-card').textContent : '';
+  check('OVD06', 'Collecting an overdue delivery makes it Collected and removes it from the overdue list',
+    sawOverdueOrder && ov.order('OV-1').status === 'COLLECTED' && !/OV-1/.test(cardC) && /OV-2/.test(cardC) && ov.$('#n-overdue').textContent === '1' && ov.$('#n-collected').textContent === '1');
+  await asRes('resident01', 'Resident123!');
+  const rt6 = ov.text();
+  check('OVD06', 'The resident sees it in their history as Collected, with no overdue notices left for it',
+    /Collection history/.test(rt6) && /Collected/.test(ov.$$('table').map((x) => x.textContent).join(' ')) && !/Overdue ·/.test(rt6) && !/Reminder from staff/.test(rt6) && ov.$$('.code').length === 0);
+  await asStaff();
+  await ov.click(ov.$('[data-action="demo-ff10"]'));
+  check('OVD07', 'A collected delivery stays Collected after its deadline and gets no further reminders or overdue entries',
+    ov.order('OV-1').status === 'COLLECTED' && nOf('OV-1').length === 3 && logN('reminder_generated', 'OV-1') === 1 && logN('marked_overdue', 'OV-1') === 1 && !/OV-1/.test(ov.$('#overdue-card').textContent));
+  check('OVD07', 'Collected deliveries get no new notifications when the clock moves', ov.state().notifications.length === notifBefore);
+
+  // disposal
+  const dispId = ovId('OV-2');
+  ov.w.confirm = () => false;
+  await press('followup-dispose', 'OV-2');
+  check('OVD08', 'Cancelling the disposal dialog changes nothing', ov.order('OV-2').status === 'PENDING' && /Disposal cancelled/.test(ov.text()) && logN('disposed') === 0);
+  let asked = '';
+  ov.w.confirm = (m) => { asked = String(m); return true; };
+  await press('followup-dispose', 'OV-2');
+  const d2 = ov.order('OV-2');
+  check('OVD08', 'The disposal dialog names the delivery and the building procedure; confirming marks it Disposed with a time and a log entry',
+    /OV-2/.test(asked) && /building procedure/.test(asked) && /cannot be undone/.test(asked) && d2.status === 'DISPOSED' && typeof d2.disposedTime === 'number' &&
+    logN('disposed', 'OV-2') === 1 && /Delivery disposed|now recorded as disposed/.test(ov.text()));
+  ov.w.confirm = () => true;
+  await ov.nav('#/staff');
+  c.set(ov.$('#q-filter'), 'disposed');
+  check('OVD08', 'The dashboard counts it as Disposed (not overdue) and lists it under the Disposed filter',
+    ov.$('#n-disposed').textContent === '1' && ov.$('#n-overdue').textContent === '0' && !ov.$('#overdue-card') && /OV-2/.test(ov.$('#queue').textContent) && /Disposed/.test(ov.$('#queue').textContent));
+  const code2ov = d2.collectionCode;
+  await ov.verify(code2ov);
+  check('OVD09', 'The code of a disposed delivery is refused with a clear message and no confirm button',
+    /disposed/i.test(ov.text()) && !ov.$('[data-action="confirm"]') && ov.order('OV-2').status === 'DISPOSED');
+  const nBeforeFf = ov.state().notifications.length;
+  await ov.nav('#/staff');
+  await ov.click(ov.$('[data-action="demo-ff10"]'));
+  check('OVD08', 'After disposal there are no more reminders for it as time moves on (reminder, overdue and the disposal notice only)',
+    nOf('OV-2').length === 3 && nOf('OV-2').map((n) => n.type).sort().join() === 'disposed,overdue,reminder' && ov.state().notifications.length === nBeforeFf);
+  await asRes('resident02', 'Resident456!');
+  const rt8 = ov.text();
+  check('OVD08', 'The resident is told it was disposed, sees it in history as Disposed, and has no code or overdue notice left for it',
+    /Delivery disposed · OV-2 · Unit A-12-05/.test(rt8) && /Disposed/.test(ov.$$('table').map((x) => x.textContent).join(' ')) && ov.$$('.code').length === 0 && !/Overdue ·/.test(rt8));
+  const live2 = ov.F.normalizeState(ov.state());
+  const staffU = ov.user('u-staff01');
+  const nowT = Date.now() + live2.offsetMs;
+  check('OVD09', 'Invalid actions are refused by the rules themselves: disposing a collected or disposed delivery, or following up on one',
+    ov.F.disposeDelivery(live2, staffU, ovId('OV-1'), nowT).reason === 'already_collected' && ov.F.disposeDelivery(live2, staffU, ovId('OV-2'), nowT).reason === 'already_disposed' &&
+    ov.F.sendStaffReminder(live2, staffU, ovId('OV-1'), nowT).reason === 'already_collected' && ov.F.recordContact(live2, staffU, ovId('OV-2'), nowT).reason === 'already_disposed' &&
+    ov.F.disposeDelivery(live2, ov.user('u-res02'), ovId('OV-2'), nowT).reason === 'forbidden');
+  await refreshCheck('After collection and disposal');
+
+  // consistent counts as time advances
+  await asStaff();
+  await ov.register('A-12-07', 'OV-3');
+  await ov.nav('#/staff');
+  const spots = [];
+  for (let i = 0; i < 3; i++) {
+    const live = ov.F.normalizeState(ov.state());
+    const sm = ov.F.summary(live, staffU, Date.now() + live.offsetMs);
+    spots.push(ov.$('#n-pending').textContent === String(sm.onTime) && ov.$('#n-overdue').textContent === String(sm.overdue) &&
+      ov.$('#n-collected').textContent === String(sm.collected) && ov.$('#n-disposed').textContent === String(sm.disposed));
+    await ov.click(ov.$('[data-action="demo-ff10"]'));
+  }
+  check('OVD10', 'Advancing the demo clock step by step: the dashboard counts always match the rules, and OV-3 goes Pending Collection, reminder, Overdue once each',
+    spots.every(Boolean) && nOf('OV-3', 'reminder').length === 1 && nOf('OV-3', 'overdue').length === 1 && ov.order('OV-3').status === 'PENDING' && ov.$('#n-overdue').textContent === '1');
+
+  // saved data from the version before this feature
+  const legacy = L.newState();
+  L.seed(legacy, null, Date.now(), Math.random);
+  const lj = JSON.parse(JSON.stringify(legacy));
+  delete lj.notifications; delete lj.nextNotifId;
+  lj.audit = lj.audit.filter((e) => !/^(reminder_generated|marked_overdue)$/.test(e.eventType));
+  lj.orders.forEach((o) => { delete o.disposedTime; delete o.disposedBy; delete o.followUp; });
+  const legacyOrders = JSON.stringify(lj.orders);
+  const lg1 = await boot({ local: { [STATE_KEY]: JSON.stringify(lj) }, hash: '#/login' });
+  await lg1.login('staff01', 'Staff123!');
+  const s1 = lg1.state();
+  const k1 = s1.notifications.map((n) => n.type + ':' + n.orderReference).sort().join();
+  const lg2 = await boot({ local: { [STATE_KEY]: lg1.w.localStorage.getItem(STATE_KEY) }, session: { [SESSION_KEY]: 'u-staff01' }, hash: '#/staff' });
+  await lg2.nav('#/staff/log'); await lg2.nav('#/staff');
+  const s2 = lg2.state();
+  check('UPG', 'Data saved before the overdue feature: deliveries unchanged, the already-overdue delivery gets its notices once, and a refresh adds nothing',
+    JSON.stringify(s1.orders) === legacyOrders && k1 === 'overdue:FS-1001,reminder:FS-1001,reminder:FS-1002' && s2.notifications.length === s1.notifications.length && s2.audit.length === s1.audit.length &&
+    /FS-1001/.test(lg1.$('#overdue-card').textContent) && lg1.$('#n-overdue').textContent === '1', k1);
 
   check('EXTRA', 'No script errors in any test page', scriptErrors.length === 0, scriptErrors.join(' | '));
 

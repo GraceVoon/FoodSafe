@@ -8,6 +8,12 @@
  *    grant itself staff rights.
  *  - Time is always passed in as `now` (ms) so the demo clock and the tests can simulate it.
  *  - An action either completes fully or changes nothing.
+ *  - A delivery's status is stored as PENDING, COLLECTED or DISPOSED. "Overdue" is never stored: it is
+ *    worked out from the arrival time, the overdue limit and `now` by deliveryStatus() (the one place
+ *    that decides), so every screen and rule agrees. There are no timers.
+ *  - Reminders and overdue notifications are created by syncNotifications(state, now). It can be called
+ *    any number of times (page refresh, dashboard reopened, demo clock moved) and each notification is
+ *    created once, because every one has a unique key.
  *
  * IMPORTANT: this is a front-end only prototype. Checks that run in browser JavaScript show correct
  * role separation, but anyone who can edit the code or browser storage can bypass them. Real
@@ -23,6 +29,9 @@
   var RESIDENT = 'RESIDENT';
   var PENDING = 'PENDING';
   var COLLECTED = 'COLLECTED';
+  var DISPOSED = 'DISPOSED';
+  var OVERDUE = 'OVERDUE';           // derived display status only, never stored on an order
+  var SYSTEM = 'SYSTEM';             // actor for events the app records by itself (reminders, overdue)
 
   var CODE_MIN = 100000;          // 6-digit codes
   var CODE_SPAN = 900000;
@@ -30,6 +39,8 @@
   var MIN_DELEGATION_MIN = 5;
   var MAX_DELEGATION_MIN = 240;
   var LOG_LIMIT = 500;
+  var FOLLOWUP_GAP_MIN = 5;          // a staff reminder or contact record can be repeated after this many minutes
+  var STATUS_LABELS = { PENDING: 'Pending Collection', OVERDUE: 'Overdue', COLLECTED: 'Collected', DISPOSED: 'Disposed' };
 
   // ---------------------------------------------------------------------------------------------
   // The ONE place demo accounts are defined. These are public demo credentials, not real security.
@@ -123,6 +134,8 @@
       tests: [],
       nextOrderId: 1,
       nextLogId: 1,
+      notifications: [],                 // simulated messages to residents
+      nextNotifId: 1,
       offsetMs: 0,                       // demo clock offset
       settings: { overdueMinutes: DEFAULT_OVERDUE_MIN },
       verifications: {},                 // userId -> code check passed, waiting for staff confirmation
@@ -145,11 +158,14 @@
       if (typeof o.orderReference !== 'string' || !o.orderReference) return null;
       if (seenRefs[o.orderReference.toLowerCase()]) return null;
       if (validUnits().indexOf(o.residentUnit) === -1) return null;
-      if (o.status !== PENDING && o.status !== COLLECTED) return null;
+      if (o.status !== PENDING && o.status !== COLLECTED && o.status !== DISPOSED) return null;
       if (typeof o.collectionCode !== 'string' || !o.collectionCode) return null;
       if (typeof o.arrivalTime !== 'number' || !isFinite(o.arrivalTime)) return null;
       if (!Array.isArray(o.delegations)) return null;
       if (o.status === COLLECTED && (typeof o.collectionTime !== 'number' || !isFinite(o.collectionTime))) return null;
+      if (o.status === DISPOSED && (typeof o.disposedTime !== 'number' || !isFinite(o.disposedTime))) return null;
+      // Follow-up record is optional (orders saved before this feature do not have one). Only repair it if it is damaged.
+      if (o.followUp != null && (typeof o.followUp !== 'object' || Array.isArray(o.followUp))) o.followUp = null;
       seenIds[o.orderId] = true;
       seenRefs[o.orderReference.toLowerCase()] = true;
       if (o.orderId > maxId) maxId = o.orderId;
@@ -159,6 +175,21 @@
     var tests = Array.isArray(raw.tests) ? raw.tests.filter(function (t) {
       return t && typeof t.participant === 'string' && (t.condition === 'with' || t.condition === 'without') && typeof t.seconds === 'number' && isFinite(t.seconds);
     }) : [];
+    var byId = {};
+    raw.orders.forEach(function (o) { byId[o.orderId] = o; });
+    var notifs = [];
+    var seenKeys = {};
+    var maxNotif = 0;
+    (Array.isArray(raw.notifications) ? raw.notifications : []).forEach(function (n) {
+      if (!n || typeof n !== 'object' || !isInt(n.id) || typeof n.key !== 'string' || typeof n.type !== 'string') return;
+      if (typeof n.createdAt !== 'number' || !isFinite(n.createdAt)) return;
+      var ord = byId[n.orderId];
+      if (!ord || ord.residentUnit !== n.unit) return;          // orphaned or mismatched: never shown to anyone
+      if (seenKeys[n.key]) return;                               // never keep two copies of one notification
+      seenKeys[n.key] = true;
+      if (n.id > maxNotif) maxNotif = n.id;
+      notifs.push(n);
+    });
     var overdue = raw.settings && isInt(raw.settings.overdueMinutes) && raw.settings.overdueMinutes >= 1 && raw.settings.overdueMinutes <= 240
       ? raw.settings.overdueMinutes : DEFAULT_OVERDUE_MIN;
     return {
@@ -167,6 +198,8 @@
       tests: tests,
       nextOrderId: Math.max(isInt(raw.nextOrderId) ? raw.nextOrderId : 1, maxId + 1),
       nextLogId: Math.max(isInt(raw.nextLogId) ? raw.nextLogId : 1, maxLog + 1),
+      notifications: notifs,
+      nextNotifId: Math.max(isInt(raw.nextNotifId) ? raw.nextNotifId : 1, maxNotif + 1),
       offsetMs: typeof raw.offsetMs === 'number' && isFinite(raw.offsetMs) ? raw.offsetMs : 0,
       settings: { overdueMinutes: overdue },
       verifications: raw.verifications && typeof raw.verifications === 'object' && !Array.isArray(raw.verifications) ? raw.verifications : {},
@@ -178,13 +211,14 @@
   // Activity log (never records passwords or typed codes)
   // ---------------------------------------------------------------------------------------------
   function log(state, now, eventType, actor, orderReference, outcome, message) {
-    var a = actor ? authActor(actor) : null;
+    var isSystem = actor === SYSTEM;
+    var a = actor && !isSystem ? authActor(actor) : null;
     state.audit.unshift({
       logId: state.nextLogId++,
       eventType: eventType,
       actorUserId: a ? a.userId : null,
-      actorRole: a ? a.role : 'ANONYMOUS',
-      actorName: a ? a.username : null,
+      actorRole: isSystem ? SYSTEM : a ? a.role : 'ANONYMOUS',
+      actorName: isSystem ? 'system' : a ? a.username : null,
       orderReference: orderReference || null,
       timestamp: now,
       outcome: outcome,
@@ -205,6 +239,8 @@
       return [e.eventType, e.actorRole, e.actorName, e.orderReference, e.outcome, e.message]
         .join(' ').toLowerCase().indexOf(q) !== -1;
     });
+    // Newest first by the time the event happened (a reminder created later still sits at its own time).
+    entries.sort(function (x, y) { return (y.timestamp - x.timestamp) || (y.logId - x.logId); });
     return { ok: true, entries: entries };
   }
 
@@ -294,7 +330,10 @@
       codeUsed: false,
       delegations: [],
       collectedBy: null,
-      confirmedBy: null
+      confirmedBy: null,
+      disposedTime: null,
+      disposedBy: null,
+      followUp: null                     // created when staff first record a follow-up action
     };
     state.nextOrderId++;
     state.orders.push(order);
@@ -323,6 +362,9 @@
   // ---------------------------------------------------------------------------------------------
   // Verify a code, then (separately) confirm the handoff
   // ---------------------------------------------------------------------------------------------
+  // Why a delivery that is no longer pending cannot be acted on.
+  function closedReason(order) { return order.status === DISPOSED ? 'already_disposed' : 'already_collected'; }
+
   function failVerify(state, actor, now, ref, reason, message) {
     state.failStreak = (state.failStreak || 0) + 1;
     log(state, now, 'verify_failed', actor, ref, 'FAILURE', message);
@@ -343,8 +385,8 @@
 
     var order = hit.order;
     if (order.status !== PENDING) {
-      return failVerify(state, g.actor, now, order.orderReference, 'already_collected',
-        'Code rejected: ' + order.orderReference + ' was already collected');
+      return failVerify(state, g.actor, now, order.orderReference, closedReason(order),
+        'Code rejected: ' + order.orderReference + (order.status === DISPOSED ? ' was disposed of' : ' was already collected'));
     }
     if (hit.via === 'delegate') {
       if (hit.delegation.revoked) {
@@ -394,7 +436,8 @@
     var order = findOrder(state, orderId);
     if (!order) return failCollect(state, g.actor, now, null, 'not_found', 'Collection failed: order not found');
     if (order.status !== PENDING) {
-      return failCollect(state, g.actor, now, order, 'already_collected', 'Collection rejected: ' + order.orderReference + ' was already collected');
+      return failCollect(state, g.actor, now, order, closedReason(order),
+        'Collection rejected: ' + order.orderReference + (order.status === DISPOSED ? ' was disposed of' : ' was already collected'));
     }
     if (v.via === 'delegate') {
       var d = null;
@@ -424,7 +467,7 @@
     if (g.fail) return g.fail;
     var order = findOrder(state, orderId);
     if (!order || order.residentUnit !== g.actor.unitNumber) return { ok: false, reason: 'not_found' };
-    if (order.status !== PENDING) return { ok: false, reason: 'already_collected' };
+    if (order.status !== PENDING) return { ok: false, reason: closedReason(order) };
     var n = String(name == null ? '' : name).trim();
     if (!n) return { ok: false, reason: 'name_required' };
     if (n.length > 40) return { ok: false, reason: 'name_too_long' };
@@ -449,26 +492,49 @@
   // Waiting time, queue, dashboards
   // ---------------------------------------------------------------------------------------------
   function waitingMinutes(order, now) {
-    var end = order.status === COLLECTED && order.collectionTime != null ? order.collectionTime : now;
+    var end = now;
+    if (order.status === COLLECTED && order.collectionTime != null) end = order.collectionTime;
+    else if (order.status === DISPOSED && order.disposedTime != null) end = order.disposedTime;
     return Math.max(0, Math.floor((end - order.arrivalTime) / 60000));
   }
 
+  // The collection deadline: arrival time plus the overdue limit.
+  function deadlineTime(order, thresholdMin) { return order.arrivalTime + thresholdMin * 60000; }
+
+  // THE one place that decides a delivery's status. PENDING means "Pending Collection".
+  function deliveryStatus(order, now, thresholdMin) {
+    if (order.status === COLLECTED) return COLLECTED;
+    if (order.status === DISPOSED) return DISPOSED;
+    return waitingMinutes(order, now) >= thresholdMin ? OVERDUE : PENDING;
+  }
+
   function isOverdue(order, now, thresholdMin) {
-    return order.status === PENDING && waitingMinutes(order, now) >= thresholdMin;
+    return deliveryStatus(order, now, thresholdMin) === OVERDUE;
+  }
+
+  // When the reminder is due, in minutes after arrival: two thirds of the way to the deadline
+  // (20 of 30, 10 of 15). Null when the limit is too short to fit a reminder before it.
+  function reminderMinutes(thresholdMin) {
+    var m = Math.max(1, Math.floor(thresholdMin * 2 / 3));
+    return m < thresholdMin ? m : null;
   }
 
   function summary(state, actor, now) {
     var g = guard(actor, STAFF);
     if (g.fail) return g.fail;
-    var pending = 0, overdue = 0, collected = 0;
+    var pending = 0, overdue = 0, collected = 0, disposed = 0;
     state.orders.forEach(function (o) {
       if (o.status === COLLECTED) collected++;
+      else if (o.status === DISPOSED) disposed++;
       else { pending++; if (isOverdue(o, now, state.settings.overdueMinutes)) overdue++; }
     });
-    return { ok: true, pending: pending, overdue: overdue, collected: collected };
+    // pending = everything still awaiting collection (overdue included); onTime = pending and not yet overdue
+    return { ok: true, pending: pending, onTime: pending - overdue, overdue: overdue, collected: collected, disposed: disposed };
   }
 
-  // filter: 'pending' (default, includes overdue) | 'overdue' | 'collected' | 'all'
+  function closedAt(o) { return o.status === COLLECTED ? o.collectionTime : o.disposedTime; }
+
+  // filter: 'pending' (default, includes overdue) | 'overdue' | 'collected' | 'disposed' | 'all'
   function queue(state, actor, opts, now) {
     var g = guard(actor, STAFF);
     if (g.fail) return g.fail;
@@ -479,13 +545,15 @@
       if (filter === 'pending' && o.status !== PENDING) return false;
       if (filter === 'overdue' && !isOverdue(o, now, state.settings.overdueMinutes)) return false;
       if (filter === 'collected' && o.status !== COLLECTED) return false;
+      if (filter === 'disposed' && o.status !== DISPOSED) return false;
       if (q && o.orderReference.toLowerCase().indexOf(q) === -1 && o.residentUnit.toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
     list.sort(function (a, b) {
-      if (a.status !== b.status) return a.status === PENDING ? -1 : 1;
-      if (a.status === PENDING) return a.arrivalTime - b.arrivalTime;           // oldest waiting first
-      return b.collectionTime - a.collectionTime;                               // latest collected first
+      var ap = a.status === PENDING, bp = b.status === PENDING;
+      if (ap !== bp) return ap ? -1 : 1;
+      if (ap) return a.arrivalTime - b.arrivalTime;           // oldest waiting first
+      return closedAt(b) - closedAt(a);                       // latest finished first
     });
     return { ok: true, orders: list };
   }
@@ -496,8 +564,161 @@
     if (g.fail) return g.fail;
     var mine = state.orders.filter(function (o) { return o.residentUnit === g.actor.unitNumber; });
     var pending = mine.filter(function (o) { return o.status === PENDING; }).sort(function (a, b) { return a.arrivalTime - b.arrivalTime; });
-    var history = mine.filter(function (o) { return o.status === COLLECTED; }).sort(function (a, b) { return b.collectionTime - a.collectionTime; });
+    var history = mine.filter(function (o) { return o.status !== PENDING; }).sort(function (a, b) { return closedAt(b) - closedAt(a); });
     return { ok: true, unit: g.actor.unitNumber, pending: pending, history: history };
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Simulated notifications. Nothing is really sent: these are messages shown on the resident's page.
+  // ---------------------------------------------------------------------------------------------
+  function addNotification(state, order, type, key, createdAt, dueAt) {
+    var n = {
+      id: state.nextNotifId++, key: key, orderId: order.orderId, orderReference: order.orderReference,
+      unit: order.residentUnit, type: type, createdAt: createdAt, dueAt: dueAt == null ? null : dueAt
+    };
+    state.notifications.push(n);
+    return n;
+  }
+
+  // Creates any reminder / overdue notification that is due at `now` and does not exist yet, and writes the
+  // matching activity entries at the time they became due. Safe to call as often as you like: each
+  // notification has a unique key (orderId:reminder, orderId:overdue), so nothing is ever created twice.
+  // Only PENDING orders are looked at, so collected and disposed deliveries never get another one.
+  // Returns how many notifications it created.
+  function syncNotifications(state, now) {
+    if (!Array.isArray(state.notifications)) state.notifications = [];
+    if (!isInt(state.nextNotifId) || state.nextNotifId < 1) state.nextNotifId = 1;
+    var limit = state.settings.overdueMinutes;
+    var remAt = reminderMinutes(limit);
+    var keys = {};
+    state.notifications.forEach(function (n) { keys[n.key] = true; });
+    var created = 0;
+    state.orders.forEach(function (o) {
+      if (o.status !== PENDING) return;
+      var waited = waitingMinutes(o, now);
+      var due = deadlineTime(o, limit);
+      var rKey = o.orderId + ':reminder';
+      var oKey = o.orderId + ':overdue';
+      if (remAt != null && waited >= remAt && !keys[rKey] && !keys[oKey]) {
+        var rAt = o.arrivalTime + remAt * 60000;
+        addNotification(state, o, 'reminder', rKey, rAt, due);
+        keys[rKey] = true; created++;
+        log(state, rAt, 'reminder_generated', SYSTEM, o.orderReference, 'SUCCESS',
+          'Collection reminder generated for unit ' + o.residentUnit + ' (' + o.orderReference + ')');
+      }
+      if (waited >= limit && !keys[oKey]) {
+        addNotification(state, o, 'overdue', oKey, due, due);
+        keys[oKey] = true; created++;
+        log(state, due, 'marked_overdue', SYSTEM, o.orderReference, 'SUCCESS',
+          o.orderReference + ' marked overdue; overdue notification generated for unit ' + o.residentUnit);
+      }
+    });
+    return created;
+  }
+
+  // A resident only ever gets the notifications for the unit on their own account. Reminders and overdue
+  // notices are shown only while the delivery is still waiting; a disposal notice stays visible.
+  function residentNotifications(state, actor) {
+    var g = guard(actor, RESIDENT);
+    if (g.fail) return g.fail;
+    var list = (state.notifications || []).filter(function (n) {
+      if (n.unit !== g.actor.unitNumber) return false;
+      var o = findOrder(state, n.orderId);
+      if (!o || o.residentUnit !== n.unit) return false;
+      return n.type === 'disposed' ? o.status === DISPOSED : o.status === PENDING;
+    });
+    list.sort(function (a, b) { return (b.createdAt - a.createdAt) || (b.id - a.id); });
+    return { ok: true, unit: g.actor.unitNumber, notifications: list };
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Staff follow-up on overdue deliveries (staff only; every action is recorded in the activity log)
+  // ---------------------------------------------------------------------------------------------
+  function overdueTarget(state, actor, orderId, now) {
+    var g = guard(actor, STAFF);
+    if (g.fail) return { fail: g.fail };
+    var order = findOrder(state, orderId);
+    if (!order) return { fail: { ok: false, reason: 'not_found' } };
+    if (order.status === COLLECTED) return { fail: { ok: false, reason: 'already_collected' } };
+    if (order.status === DISPOSED) return { fail: { ok: false, reason: 'already_disposed' } };
+    if (!isOverdue(order, now, state.settings.overdueMinutes)) return { fail: { ok: false, reason: 'not_overdue' } };
+    return { actor: g.actor, order: order };
+  }
+
+  function ensureFollowUp(order) {
+    if (!order.followUp) order.followUp = { reminders: 0, lastReminderAt: null, contacts: 0, lastContactAt: null, heldAt: null };
+    return order.followUp;
+  }
+
+  // Read-only view of what staff have already done for a delivery.
+  function followUpInfo(order) {
+    var f = order.followUp || {};
+    return {
+      reminders: f.reminders || 0, lastReminderAt: f.lastReminderAt || null,
+      contacts: f.contacts || 0, lastContactAt: f.lastContactAt || null,
+      heldAt: f.heldAt || null
+    };
+  }
+
+  function sendStaffReminder(state, actor, orderId, now) {
+    var t = overdueTarget(state, actor, orderId, now);
+    if (t.fail) return t.fail;
+    var o = t.order;
+    var f = followUpInfo(o);
+    if (f.lastReminderAt != null && now - f.lastReminderAt < FOLLOWUP_GAP_MIN * 60000) {
+      return { ok: false, reason: 'reminder_too_soon', lastAt: f.lastReminderAt, retryAt: f.lastReminderAt + FOLLOWUP_GAP_MIN * 60000 };
+    }
+    var fu = ensureFollowUp(o);
+    fu.reminders = f.reminders + 1;
+    fu.lastReminderAt = now;
+    var n = addNotification(state, o, 'staff_reminder', o.orderId + ':staff:' + fu.reminders, now, null);
+    log(state, now, 'followup_reminder', t.actor, o.orderReference, 'SUCCESS',
+      'Staff sent reminder #' + fu.reminders + ' to unit ' + o.residentUnit + ' for ' + o.orderReference);
+    return { ok: true, order: o, notification: n };
+  }
+
+  function recordContact(state, actor, orderId, now) {
+    var t = overdueTarget(state, actor, orderId, now);
+    if (t.fail) return t.fail;
+    var o = t.order;
+    var f = followUpInfo(o);
+    if (f.lastContactAt != null && now - f.lastContactAt < FOLLOWUP_GAP_MIN * 60000) {
+      return { ok: false, reason: 'contact_too_soon', lastAt: f.lastContactAt, retryAt: f.lastContactAt + FOLLOWUP_GAP_MIN * 60000 };
+    }
+    var fu = ensureFollowUp(o);
+    fu.contacts = f.contacts + 1;
+    fu.lastContactAt = now;
+    log(state, now, 'followup_contact', t.actor, o.orderReference, 'SUCCESS',
+      'Staff contacted unit ' + o.residentUnit + ' about ' + o.orderReference + ' (contact #' + fu.contacts + ')');
+    return { ok: true, order: o };
+  }
+
+  function recordHolding(state, actor, orderId, now) {
+    var t = overdueTarget(state, actor, orderId, now);
+    if (t.fail) return t.fail;
+    var o = t.order;
+    if (followUpInfo(o).heldAt != null) return { ok: false, reason: 'already_in_holding', lastAt: followUpInfo(o).heldAt };
+    ensureFollowUp(o).heldAt = now;
+    log(state, now, 'followup_holding', t.actor, o.orderReference, 'SUCCESS',
+      o.orderReference + ' (unit ' + o.residentUnit + ') moved to the holding area');
+    return { ok: true, order: o };
+  }
+
+  // Staff only, overdue deliveries only, and only when staff choose to. Nothing is ever disposed of by a timer.
+  function disposeDelivery(state, actor, orderId, now) {
+    var t = overdueTarget(state, actor, orderId, now);
+    if (t.fail) return t.fail;
+    var o = t.order;
+    o.status = DISPOSED;
+    o.disposedTime = now;
+    o.disposedBy = t.actor.userId;
+    Object.keys(state.verifications || {}).forEach(function (uid) {     // a half-finished code check can no longer complete
+      if (state.verifications[uid].orderId === o.orderId) delete state.verifications[uid];
+    });
+    addNotification(state, o, 'disposed', o.orderId + ':disposed', now, null);
+    log(state, now, 'disposed', t.actor, o.orderReference, 'SUCCESS',
+      o.orderReference + ' (unit ' + o.residentUnit + ') marked as disposed by ' + t.actor.username);
+    return { ok: true, order: o };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -561,6 +782,8 @@
     state.audit = [];
     state.nextOrderId = 1;
     state.nextLogId = 1;
+    state.notifications = [];
+    state.nextNotifId = 1;
     state.verifications = {};
     state.failStreak = 0;
   }
@@ -586,6 +809,7 @@
       var o = makeOrder(state, staff.userId, d[0], d[1], d[2], t - d[3] * MIN, rng);
       log(state, o.arrivalTime, 'delivery_registered', staff, o.orderReference, 'SUCCESS', 'Delivery ' + d[0] + ' registered for unit ' + d[1]);
     });
+    syncNotifications(state, t);              // reminders and overdue notices that are already due in the sample data
     log(state, t, 'demo_loaded', actor, null, 'SUCCESS', 'Sample demo data loaded');
   }
 
@@ -616,6 +840,7 @@
     if (!isFinite(m) || Math.floor(m) !== m || m < 1 || m > 600) return { ok: false, reason: 'bad_minutes' };
     state.offsetMs = (state.offsetMs || 0) + m * 60000;
     log(state, now + m * 60000, 'demo_clock', g.actor, null, 'SUCCESS', 'Demo clock moved ahead ' + m + ' min');
+    syncNotifications(state, now + m * 60000);
     return { ok: true };
   }
 
@@ -626,18 +851,24 @@
     if (!isFinite(m) || Math.floor(m) !== m || m < 1 || m > 240) return { ok: false, reason: 'bad_minutes' };
     state.settings.overdueMinutes = m;
     log(state, now, 'demo_threshold', g.actor, null, 'SUCCESS', 'Overdue limit set to ' + m + ' min');
+    syncNotifications(state, now);
     return { ok: true };
   }
 
   return {
-    STAFF: STAFF, RESIDENT: RESIDENT, PENDING: PENDING, COLLECTED: COLLECTED,
+    STAFF: STAFF, RESIDENT: RESIDENT, PENDING: PENDING, COLLECTED: COLLECTED, DISPOSED: DISPOSED, OVERDUE: OVERDUE,
+    STATUS_LABELS: STATUS_LABELS, FOLLOWUP_GAP_MIN: FOLLOWUP_GAP_MIN,
     DEFAULT_OVERDUE_MIN: DEFAULT_OVERDUE_MIN,
     demoLogins: demoLogins, validUnits: validUnits, residentDirectory: residentDirectory, accountProblems: accountProblems, getUserById: getUserById,
     newState: newState, normalizeState: normalizeState, seed: seed,
     login: login, logout: logout, recordAccessDenied: recordAccessDenied,
     registerDelivery: registerDelivery, verifyCode: verifyCode, cancelVerification: cancelVerification,
     completeCollection: completeCollection, createDelegation: createDelegation, activeDelegation: activeDelegation,
-    waitingMinutes: waitingMinutes, isOverdue: isOverdue, summary: summary, queue: queue,
+    waitingMinutes: waitingMinutes, isOverdue: isOverdue, deliveryStatus: deliveryStatus, deadlineTime: deadlineTime,
+    reminderMinutes: reminderMinutes, summary: summary, queue: queue,
+    syncNotifications: syncNotifications, residentNotifications: residentNotifications,
+    sendStaffReminder: sendStaffReminder, recordContact: recordContact, recordHolding: recordHolding,
+    disposeDelivery: disposeDelivery, followUpInfo: followUpInfo,
     residentOrders: residentOrders, getActivityLog: getActivityLog, findOrder: findOrder,
     addTest: addTest, clearTests: clearTests, testSummary: testSummary, testsToCsv: testsToCsv,
     loadDemo: loadDemo, resetDemo: resetDemo, advanceClock: advanceClock, setOverdueMinutes: setOverdueMinutes
