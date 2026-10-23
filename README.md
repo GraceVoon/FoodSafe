@@ -10,9 +10,7 @@ FoodSafe is a prototype designed to make food delivery collection more organised
 ## Submission Links
 
 - **Live Prototype:** [Open FoodSafe](https://gracevoon.github.io/FoodSafe/)
-- **Pitch Deck:** Add your pitch deck link before submission.
-- **Demo Video:** Add your demo video link before submission.
-- **Source Code:** This GitHub repository.
+- **Demo Video:** [Open Demo Video](https://youtu.be/Tovll75ZjBA)
 
 > **Demo notice:** FoodSafe uses simulated data and browser-based demonstration accounts. It does not connect to real delivery services, riders, SMS notifications, CCTV, or a live backend. The login demonstrates role-specific workflows but does not provide production-grade security.
 
